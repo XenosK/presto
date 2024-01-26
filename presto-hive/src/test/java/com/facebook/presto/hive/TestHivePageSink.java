@@ -53,6 +53,7 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -67,8 +68,8 @@ import static com.facebook.presto.common.type.IntegerType.INTEGER;
 import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.expressions.LogicalRowExpressions.TRUE_CONSTANT;
 import static com.facebook.presto.hive.AbstractTestHiveClient.TEST_HIVE_PAGE_SINK_CONTEXT;
+import static com.facebook.presto.hive.BaseHiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.CacheQuotaRequirement.NO_CACHE_REQUIREMENT;
-import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveCompressionCodec.NONE;
 import static com.facebook.presto.hive.HiveQueryRunner.HIVE_CATALOG;
 import static com.facebook.presto.hive.HiveQueryRunner.METASTORE_CONTEXT;
@@ -76,6 +77,7 @@ import static com.facebook.presto.hive.HiveTestUtils.FUNCTION_AND_TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveTestUtils.PAGE_SORTER;
 import static com.facebook.presto.hive.HiveTestUtils.ROW_EXPRESSION_SERVICE;
 import static com.facebook.presto.hive.HiveTestUtils.createTestHdfsEnvironment;
+import static com.facebook.presto.hive.HiveTestUtils.getAllSessionProperties;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveBatchPageSourceFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveFileWriterFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveRecordCursorProvider;
@@ -116,16 +118,7 @@ public class TestHivePageSink
         File tempDir = Files.createTempDir();
         try {
             ExtendedHiveMetastore metastore = createTestingFileHiveMetastore(new File(tempDir, "metastore"));
-            for (HiveStorageFormat format : HiveStorageFormat.values()) {
-                if (format == HiveStorageFormat.CSV) {
-                    // CSV supports only unbounded VARCHAR type, which is not provided by lineitem
-                    continue;
-                }
-                if (format == HiveStorageFormat.ALPHA) {
-                    // Alpha read/write is not supported yet
-                    continue;
-                }
-
+            for (HiveStorageFormat format : getSupportedHiveStorageFormats()) {
                 config.setHiveStorageFormat(format);
                 config.setCompressionCodec(NONE);
                 long uncompressedLength = writeTestFile(config, metastoreClientConfig, metastore, makeFileName(tempDir, config));
@@ -144,6 +137,14 @@ public class TestHivePageSink
         finally {
             deleteRecursively(tempDir.toPath(), ALLOW_INSECURE);
         }
+    }
+
+    protected List<HiveStorageFormat> getSupportedHiveStorageFormats()
+    {
+        // CSV supports only unbounded VARCHAR type, and Alpha does not support DML yet
+        return Arrays.stream(HiveStorageFormat.values())
+                .filter(format -> format != HiveStorageFormat.CSV && format != HiveStorageFormat.ALPHA)
+                .collect(toImmutableList());
     }
 
     private static String makeFileName(File tempDir, HiveClientConfig config)
@@ -213,8 +214,8 @@ public class TestHivePageSink
                 pages.add(nextPage.getLoadedPage());
             }
         }
-        MaterializedResult expectedResults = toMaterializedResult(getSession(config), columnTypes, ImmutableList.of(page));
-        MaterializedResult results = toMaterializedResult(getSession(config), columnTypes, pages);
+        MaterializedResult expectedResults = toMaterializedResult(getSession(config, new HiveCommonClientConfig()), columnTypes, ImmutableList.of(page));
+        MaterializedResult results = toMaterializedResult(getSession(config, new HiveCommonClientConfig()), columnTypes, pages);
         assertEquals(results, expectedResults);
         assertEquals(stats.getInputPageSizeInBytes().getAllTime().getMax(), page.getRetainedSizeInBytes());
         return length;
@@ -294,7 +295,7 @@ public class TestHivePageSink
                 transaction,
                 Optional.of(layoutHandle));
         HivePageSourceProvider provider = new HivePageSourceProvider(config, createTestHdfsEnvironment(config, metastoreClientConfig), getDefaultHiveRecordCursorProvider(config, metastoreClientConfig), getDefaultHiveBatchPageSourceFactories(config, metastoreClientConfig), getDefaultHiveSelectivePageSourceFactories(config, metastoreClientConfig), FUNCTION_AND_TYPE_MANAGER, ROW_EXPRESSION_SERVICE);
-        return provider.createPageSource(transaction, getSession(config), split, tableHandle.getLayout().get(), ImmutableList.copyOf(getColumnHandles()), NON_CACHEABLE);
+        return provider.createPageSource(transaction, getSession(config, new HiveCommonClientConfig()), split, tableHandle.getLayout().get(), ImmutableList.copyOf(getColumnHandles()), NON_CACHEABLE);
     }
 
     private static ConnectorPageSink createPageSink(HiveTransactionHandle transaction, HiveClientConfig config, MetastoreClientConfig metastoreClientConfig, ExtendedHiveMetastore metastore, Path outputPath, HiveWriterStats stats)
@@ -335,12 +336,17 @@ public class TestHivePageSink
                 stats,
                 getDefaultOrcFileWriterFactory(config, metastoreClientConfig),
                 HiveColumnConverterProvider.DEFAULT_COLUMN_CONVERTER_PROVIDER);
-        return provider.createPageSink(transaction, getSession(config), handle, TEST_HIVE_PAGE_SINK_CONTEXT);
+        return provider.createPageSink(transaction, getSession(config, new HiveCommonClientConfig()), handle, TEST_HIVE_PAGE_SINK_CONTEXT);
     }
 
     private static TestingConnectorSession getSession(HiveClientConfig config)
     {
         return new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig(), new CacheConfig()).getSessionProperties());
+    }
+
+    private static TestingConnectorSession getSession(HiveClientConfig config, HiveCommonClientConfig hiveCommonClientConfig)
+    {
+        return new TestingConnectorSession(getAllSessionProperties(config, hiveCommonClientConfig));
     }
 
     public static List<HiveColumnHandle> getColumnHandles()

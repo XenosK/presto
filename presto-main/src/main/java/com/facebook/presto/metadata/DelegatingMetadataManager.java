@@ -27,12 +27,14 @@ import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
-import com.facebook.presto.spi.MaterializedViewStatus;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.TableMetadata;
+import com.facebook.presto.spi.analyzer.ViewDefinition;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
+import com.facebook.presto.spi.connector.ConnectorTableVersion;
 import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
@@ -41,7 +43,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.sql.analyzer.ViewDefinition;
 import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
@@ -93,15 +94,15 @@ public abstract class DelegatingMetadataManager
     }
 
     @Override
-    public Optional<TableHandle> getTableHandle(Session session, QualifiedObjectName tableName)
-    {
-        return delegate.getTableHandle(session, tableName);
-    }
-
-    @Override
     public Optional<SystemTable> getSystemTable(Session session, QualifiedObjectName tableName)
     {
         return delegate.getSystemTable(session, tableName);
+    }
+
+    @Override
+    public Optional<TableHandle> getHandleVersion(Session session, QualifiedObjectName tableName, Optional<ConnectorTableVersion> tableVersion)
+    {
+        return delegate.getHandleVersion(session, tableName, tableVersion);
     }
 
     @Override
@@ -359,9 +360,15 @@ public abstract class DelegatingMetadataManager
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
     {
-        return delegate.getUpdateRowIdColumnHandle(session, tableHandle);
+        return delegate.getDeleteRowIdColumnHandle(session, tableHandle);
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        return delegate.getUpdateRowIdColumnHandle(session, tableHandle, updatedColumns);
     }
 
     @Override
@@ -386,6 +393,18 @@ public abstract class DelegatingMetadataManager
     public void finishDelete(Session session, TableHandle tableHandle, Collection<Slice> fragments)
     {
         delegate.finishDelete(session, tableHandle, fragments);
+    }
+
+    @Override
+    public TableHandle beginUpdate(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        return delegate.beginUpdate(session, tableHandle, updatedColumns);
+    }
+
+    @Override
+    public void finishUpdate(Session session, TableHandle tableHandle, Collection<Slice> fragments)
+    {
+        delegate.finishUpdate(session, tableHandle, fragments);
     }
 
     @Override
@@ -439,12 +458,6 @@ public abstract class DelegatingMetadataManager
     public void dropMaterializedView(Session session, QualifiedObjectName viewName)
     {
         delegate.dropMaterializedView(session, viewName);
-    }
-
-    @Override
-    public MaterializedViewStatus getMaterializedViewStatus(Session session, QualifiedObjectName materializedViewName, TupleDomain<String> baseQueryDomain)
-    {
-        return delegate.getMaterializedViewStatus(session, materializedViewName, baseQueryDomain);
     }
 
     @Override

@@ -19,12 +19,15 @@ import com.facebook.presto.spi.ConstantProperty;
 import com.facebook.presto.spi.GroupingProperty;
 import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SortingProperty;
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.DistinctLimitNode;
+import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.LimitNode;
 import com.facebook.presto.spi.plan.MarkDistinctNode;
 import com.facebook.presto.spi.plan.OrderingScheme;
+import com.facebook.presto.spi.plan.OutputNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.plan.TopNNode;
@@ -33,7 +36,6 @@ import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
-import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
@@ -44,7 +46,6 @@ import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
-import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
@@ -118,24 +119,25 @@ public class AddLocalExchanges
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public PlanOptimizerResult optimize(PlanNode plan, Session session, TypeProvider types, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         PlanWithProperties result = new Rewriter(variableAllocator, idAllocator, session).accept(plan, any());
-        return result.getNode();
+        boolean optimizerTriggered = PlanNodeSearcher.searchFrom(result.getNode()).where(node -> node instanceof ExchangeNode && ((ExchangeNode) node).getScope().isLocal()).findFirst().isPresent();
+        return PlanOptimizerResult.optimizerResult(result.getNode(), optimizerTriggered);
     }
 
     private class Rewriter
             extends InternalPlanVisitor<PlanWithProperties, StreamPreferredProperties>
     {
-        private final PlanVariableAllocator variableAllocator;
+        private final VariableAllocator variableAllocator;
         private final PlanNodeIdAllocator idAllocator;
         private final Session session;
         private final TypeProvider types;
 
-        public Rewriter(PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, Session session)
+        public Rewriter(VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, Session session)
         {
             this.variableAllocator = variableAllocator;
-            this.types = variableAllocator.getTypes();
+            this.types = TypeProvider.viewOf(variableAllocator.getVariables());
             this.idAllocator = idAllocator;
             this.session = session;
         }
@@ -377,7 +379,8 @@ public class AddLocalExchanges
                     preGroupedSymbols,
                     node.getStep(),
                     node.getHashVariable(),
-                    node.getGroupIdVariable());
+                    node.getGroupIdVariable(),
+                    node.getAggregationId());
 
             return deriveProperties(result, child.getProperties());
         }
@@ -508,8 +511,11 @@ public class AddLocalExchanges
         @Override
         public PlanWithProperties visitRowNumber(RowNumberNode node, StreamPreferredProperties parentPreferences)
         {
-            // row number requires that all data be partitioned
-            StreamPreferredProperties requiredProperties = parentPreferences.withDefaultParallelism(session).withPartitioning(node.getPartitionBy());
+            StreamPreferredProperties requiredProperties = parentPreferences.withDefaultParallelism(session);
+            // final row number requires that all data be partitioned
+            if (!node.isPartial()) {
+                requiredProperties = requiredProperties.withPartitioning(node.getPartitionBy());
+            }
             return planAndEnforceChildren(node, requiredProperties, requiredProperties);
         }
 
@@ -561,6 +567,7 @@ public class AddLocalExchanges
                             new TableWriterNode(
                                     originalTableWriterNode.getSourceLocation(),
                                     originalTableWriterNode.getId(),
+                                    originalTableWriterNode.getStatsEquivalentPlanNode(),
                                     originalTableWriterNode.getSource(),
                                     originalTableWriterNode.getTarget(),
                                     variableAllocator.newVariable("partialrowcount", BIGINT),
@@ -571,7 +578,8 @@ public class AddLocalExchanges
                                     originalTableWriterNode.getNotNullColumnVariables(),
                                     originalTableWriterNode.getTablePartitioningScheme(),
                                     originalTableWriterNode.getPreferredShufflePartitioningScheme(),
-                                    statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation)),
+                                    statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation),
+                                    originalTableWriterNode.getTaskCountIfScaledWriter()),
                             fixedParallelism(),
                             fixedParallelism());
                 }
@@ -584,6 +592,7 @@ public class AddLocalExchanges
                             new TableWriterNode(
                                     originalTableWriterNode.getSourceLocation(),
                                     originalTableWriterNode.getId(),
+                                    originalTableWriterNode.getStatsEquivalentPlanNode(),
                                     exchange.getNode(),
                                     originalTableWriterNode.getTarget(),
                                     variableAllocator.newVariable("partialrowcount", BIGINT),
@@ -594,7 +603,8 @@ public class AddLocalExchanges
                                     originalTableWriterNode.getNotNullColumnVariables(),
                                     originalTableWriterNode.getTablePartitioningScheme(),
                                     originalTableWriterNode.getPreferredShufflePartitioningScheme(),
-                                    statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation)),
+                                    statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation),
+                                    originalTableWriterNode.getTaskCountIfScaledWriter()),
                             exchange.getProperties());
                 }
             }
@@ -611,6 +621,7 @@ public class AddLocalExchanges
                         new TableWriterNode(
                                 originalTableWriterNode.getSourceLocation(),
                                 originalTableWriterNode.getId(),
+                                originalTableWriterNode.getStatsEquivalentPlanNode(),
                                 exchange.getNode(),
                                 originalTableWriterNode.getTarget(),
                                 variableAllocator.newVariable("partialrowcount", BIGINT),
@@ -621,7 +632,8 @@ public class AddLocalExchanges
                                 originalTableWriterNode.getNotNullColumnVariables(),
                                 originalTableWriterNode.getTablePartitioningScheme(),
                                 originalTableWriterNode.getPreferredShufflePartitioningScheme(),
-                                statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation)),
+                                statisticAggregations.map(StatisticAggregations.Parts::getPartialAggregation),
+                                originalTableWriterNode.getTaskCountIfScaledWriter()),
                         exchange.getProperties());
             }
 
@@ -762,7 +774,7 @@ public class AddLocalExchanges
 
             // this build consumes the input completely, so we do not pass through parent preferences
             List<VariableReferenceExpression> buildHashVariables = node.getCriteria().stream()
-                    .map(JoinNode.EquiJoinClause::getRight)
+                    .map(EquiJoinClause::getRight)
                     .collect(toImmutableList());
             StreamPreferredProperties buildPreference;
             if (getTaskConcurrency(session) > 1) {
@@ -920,8 +932,10 @@ public class AddLocalExchanges
         private PlanWithProperties accept(PlanNode node, StreamPreferredProperties context)
         {
             PlanWithProperties result = node.accept(this, context);
+            // TableWriter and TableWriterMergeNode has different output
+            boolean passStatsEquivalentPlanNode = !(node instanceof TableWriterNode && result.getNode() instanceof TableWriterMergeNode);
             return new PlanWithProperties(
-                    result.getNode().assignStatsEquivalentPlanNode(node.getStatsEquivalentPlanNode()),
+                    passStatsEquivalentPlanNode ? result.getNode().assignStatsEquivalentPlanNode(node.getStatsEquivalentPlanNode()) : result.getNode(),
                     result.getProperties());
         }
     }

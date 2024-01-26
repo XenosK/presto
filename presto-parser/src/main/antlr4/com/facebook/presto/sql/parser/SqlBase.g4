@@ -136,6 +136,9 @@ statement
     | EXECUTE identifier (USING expression (',' expression)*)?         #execute
     | DESCRIBE INPUT identifier                                        #describeInput
     | DESCRIBE OUTPUT identifier                                       #describeOutput
+    | UPDATE qualifiedName
+        SET updateAssignment (',' updateAssignment)*
+        (WHERE where=booleanExpression)?                               #update
     ;
 
 query
@@ -224,7 +227,7 @@ queryNoWith:
       queryTerm
       (ORDER BY sortItem (',' sortItem)*)?
       (OFFSET offset=INTEGER_VALUE (ROW | ROWS)?)?
-      (LIMIT limit=(INTEGER_VALUE | ALL))?
+      ((LIMIT limit=(INTEGER_VALUE | ALL) | (FETCH FIRST fetchFirstNRows=INTEGER_VALUE ROWS ONLY))?)?
     ;
 
 queryTerm
@@ -324,7 +327,7 @@ columnAliases
     ;
 
 relationPrimary
-    : qualifiedName                                                   #tableName
+    : qualifiedName tableVersionExpression?                             #tableName
     | '(' query ')'                                                   #subqueryRelation
     | UNNEST '(' expression (',' expression)* ')' (WITH ORDINALITY)?  #unnest
     | LATERAL '(' query ')'                                           #lateral
@@ -487,8 +490,10 @@ over
 windowFrame
     : frameType=RANGE start=frameBound
     | frameType=ROWS start=frameBound
+    | frameType=GROUPS start=frameBound
     | frameType=RANGE BETWEEN start=frameBound AND end=frameBound
     | frameType=ROWS BETWEEN start=frameBound AND end=frameBound
+    | frameType=GROUPS BETWEEN start=frameBound AND end=frameBound
     ;
 
 frameBound
@@ -498,6 +503,9 @@ frameBound
     | expression boundType=(PRECEDING | FOLLOWING)  #boundedFrame // expression should be unsignedLiteral
     ;
 
+updateAssignment
+    : identifier '=' expression
+    ;
 
 explainOption
     : FORMAT value=(TEXT | GRAPHVIZ | JSON)                 #explainFormat
@@ -527,6 +535,10 @@ privilege
 
 qualifiedName
     : identifier ('.' identifier)*
+    ;
+
+tableVersionExpression
+    : FOR tableVersionType=(SYSTEM_TIME | SYSTEM_VERSION | TIMESTAMP | VERSION) AS OF valueExpression          #tableVersion
     ;
 
 grantor
@@ -566,22 +578,22 @@ nonReserved
     | CALL | CALLED | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT | CURRENT_ROLE
     | DATA | DATE | DAY | DEFINER | DESC | DETERMINISTIC | DISTRIBUTED
     | EXCLUDING | EXPLAIN | EXTERNAL
-    | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
-    | GRANT | GRANTED | GRANTS | GRAPHVIZ
+    | FETCH | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
+    | GRANT | GRANTED | GRANTS | GRAPHVIZ | GROUPS
     | HOUR
     | IF | IGNORE | INCLUDING | INPUT | INTERVAL | INVOKER | IO | ISOLATION
     | JSON
     | LANGUAGE | LAST | LATERAL | LEVEL | LIMIT | LOGICAL
     | MAP | MATERIALIZED | MINUTE | MONTH
     | NAME | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
-    | OFFSET | ONLY | OPTION | ORDINALITY | OUTPUT | OVER
+    | OF | OFFSET | ONLY | OPTION | ORDINALITY | OUTPUT | OVER
     | PARTITION | PARTITIONS | POSITION | PRECEDING | PRIVILEGES | PROPERTIES
     | RANGE | READ | REFRESH | RENAME | REPEATABLE | REPLACE | RESET | RESPECT | RESTRICT | RETURN | RETURNS | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
     | SCHEMA | SCHEMAS | SECOND | SECURITY | SERIALIZABLE | SESSION | SET | SETS | SQL
-    | SHOW | SOME | START | STATS | SUBSTRING | SYSTEM
+    | SHOW | SOME | START | STATS | SUBSTRING | SYSTEM | SYSTEM_TIME | SYSTEM_VERSION
     | TABLES | TABLESAMPLE | TEMPORARY | TEXT | TIME | TIMESTAMP | TO | TRANSACTION | TRUNCATE | TRY_CAST | TYPE
-    | UNBOUNDED | UNCOMMITTED | USE | USER
-    | VALIDATE | VERBOSE | VIEW
+    | UNBOUNDED | UNCOMMITTED | UPDATE | USE | USER
+    | VALIDATE | VERBOSE | VERSION | VIEW
     | WORK | WRITE
     | YEAR
     | ZONE
@@ -645,6 +657,7 @@ EXPLAIN: 'EXPLAIN';
 EXTRACT: 'EXTRACT';
 EXTERNAL: 'EXTERNAL';
 FALSE: 'FALSE';
+FETCH: 'FETCH';
 FILTER: 'FILTER';
 FIRST: 'FIRST';
 FOLLOWING: 'FOLLOWING';
@@ -660,6 +673,7 @@ GRANTS: 'GRANTS';
 GRAPHVIZ: 'GRAPHVIZ';
 GROUP: 'GROUP';
 GROUPING: 'GROUPING';
+GROUPS: 'GROUPS';
 HAVING: 'HAVING';
 HOUR: 'HOUR';
 IF: 'IF';
@@ -705,6 +719,7 @@ NOT: 'NOT';
 NULL: 'NULL';
 NULLIF: 'NULLIF';
 NULLS: 'NULLS';
+OF: 'OF';
 OFFSET: 'OFFSET';
 ON: 'ON';
 ONLY: 'ONLY';
@@ -758,6 +773,8 @@ START: 'START';
 STATS: 'STATS';
 SUBSTRING: 'SUBSTRING';
 SYSTEM: 'SYSTEM';
+SYSTEM_TIME: 'SYSTEM_TIME';
+SYSTEM_VERSION: 'SYSTEM_VERSION';
 TABLE: 'TABLE';
 TABLES: 'TABLES';
 TABLESAMPLE: 'TABLESAMPLE';
@@ -777,12 +794,14 @@ UNBOUNDED: 'UNBOUNDED';
 UNCOMMITTED: 'UNCOMMITTED';
 UNION: 'UNION';
 UNNEST: 'UNNEST';
+UPDATE: 'UPDATE';
 USE: 'USE';
 USER: 'USER';
 USING: 'USING';
 VALIDATE: 'VALIDATE';
 VALUES: 'VALUES';
 VERBOSE: 'VERBOSE';
+VERSION: 'VERSION';
 VIEW: 'VIEW';
 WHEN: 'WHEN';
 WHERE: 'WHERE';

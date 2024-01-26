@@ -21,8 +21,11 @@ import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.HistoricalPlanStatistics;
 import com.facebook.presto.spi.statistics.HistoricalPlanStatisticsEntry;
 import com.facebook.presto.spi.statistics.HistoryBasedPlanStatisticsProvider;
+import com.facebook.presto.spi.statistics.JoinNodeStatistics;
+import com.facebook.presto.spi.statistics.PartialAggregationStatistics;
 import com.facebook.presto.spi.statistics.PlanStatistics;
-import com.facebook.presto.sql.planner.LogicalPlanner;
+import com.facebook.presto.spi.statistics.TableWriterNodeStatistics;
+import com.facebook.presto.sql.Optimizer;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.assertions.PlanAssert;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
@@ -35,6 +38,7 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Map;
 
+import static com.facebook.presto.SystemSessionProperties.RESTRICT_HISTORY_BASED_OPTIMIZATION_TO_COMPLEX_QUERY;
 import static com.facebook.presto.SystemSessionProperties.USE_HISTORY_BASED_PLAN_STATISTICS;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.anyTree;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.node;
@@ -49,6 +53,7 @@ public class TestHistoryBasedStatsProvider
     {
         this.queryRunner = new LocalQueryRunner(testSessionBuilder()
                 .setSystemProperty(USE_HISTORY_BASED_PLAN_STATISTICS, "true")
+                .setSystemProperty(RESTRICT_HISTORY_BASED_OPTIMIZATION_TO_COMPLEX_QUERY, "false")
                 .setCatalog("local")
                 .setSchema("tiny")
                 .setSystemProperty("task_concurrency", "1") // these tests don't handle exchanges from local parallel
@@ -85,10 +90,10 @@ public class TestHistoryBasedStatsProvider
 
     private void assertPlan(String sql, PlanMatchPattern pattern)
     {
-        assertPlan(sql, LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED, pattern);
+        assertPlan(sql, Optimizer.PlanStage.OPTIMIZED_AND_VALIDATED, pattern);
     }
 
-    private void assertPlan(String sql, LogicalPlanner.Stage stage, PlanMatchPattern pattern)
+    private void assertPlan(String sql, Optimizer.PlanStage stage, PlanMatchPattern pattern)
     {
         queryRunner.inTransaction(transactionSession -> {
             Plan actualPlan = queryRunner.createPlan(transactionSession, sql, stage, WarningCollector.NOOP);
@@ -111,7 +116,7 @@ public class TestHistoryBasedStatsProvider
         }
 
         @Override
-        public Map<PlanNodeWithHash, HistoricalPlanStatistics> getStats(List<PlanNodeWithHash> planNodeHashes)
+        public Map<PlanNodeWithHash, HistoricalPlanStatistics> getStats(List<PlanNodeWithHash> planNodeHashes, long timeoutInMilliSeconds)
         {
             return planNodeHashes.stream().collect(toImmutableMap(
                     PlanNodeWithHash -> PlanNodeWithHash,
@@ -120,8 +125,8 @@ public class TestHistoryBasedStatsProvider
                             TableScanNode node = (TableScanNode) PlanNodeWithHash.getPlanNode();
                             if (node.getTable().toString().contains("orders")) {
                                 return new HistoricalPlanStatistics(ImmutableList.of(new HistoricalPlanStatisticsEntry(
-                                        new PlanStatistics(Estimate.of(100), Estimate.of(1000), 1),
-                                        ImmutableList.of(new PlanStatistics(Estimate.of(15000), Estimate.unknown(), 1)))));
+                                        new PlanStatistics(Estimate.of(100), Estimate.of(1000), 1, JoinNodeStatistics.empty(), TableWriterNodeStatistics.empty(), PartialAggregationStatistics.empty()),
+                                        ImmutableList.of(new PlanStatistics(Estimate.of(15000), Estimate.unknown(), 1, JoinNodeStatistics.empty(), TableWriterNodeStatistics.empty(), PartialAggregationStatistics.empty())))));
                             }
                         }
                         return HistoricalPlanStatistics.empty();

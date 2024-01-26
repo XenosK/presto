@@ -14,13 +14,13 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
 import com.google.common.collect.ImmutableList;
@@ -54,14 +54,29 @@ import static java.util.Objects.requireNonNull;
 public class RemoveRedundantDistinctAggregation
         implements PlanOptimizer
 {
+    private boolean isEnabledForTesting;
+
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public void setEnabledForTesting(boolean isSet)
     {
-        if (isRemoveRedundantDistinctAggregationEnabled(session)) {
-            PlanWithProperties result = new RemoveRedundantDistinctAggregation.Rewriter().accept(plan);
-            return result.getNode();
+        isEnabledForTesting = isSet;
+    }
+
+    @Override
+    public boolean isEnabled(Session session)
+    {
+        return isEnabledForTesting || isRemoveRedundantDistinctAggregationEnabled(session);
+    }
+
+    @Override
+    public PlanOptimizerResult optimize(PlanNode plan, Session session, TypeProvider types, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    {
+        if (isEnabled(session)) {
+            Rewriter rewriter = new RemoveRedundantDistinctAggregation.Rewriter();
+            PlanWithProperties result = rewriter.accept(plan);
+            return PlanOptimizerResult.optimizerResult(result.getNode(), rewriter.isPlanChanged());
         }
-        return plan;
+        return PlanOptimizerResult.optimizerResult(plan, false);
     }
 
     private static class PlanWithProperties
@@ -90,6 +105,13 @@ public class RemoveRedundantDistinctAggregation
     private static class Rewriter
             extends InternalPlanVisitor<PlanWithProperties, Void>
     {
+        private boolean planChanged;
+
+        public boolean isPlanChanged()
+        {
+            return planChanged;
+        }
+
         @Override
         public PlanWithProperties visitPlan(PlanNode node, Void context)
         {
@@ -102,6 +124,7 @@ public class RemoveRedundantDistinctAggregation
         {
             PlanWithProperties child = accept(node.getSource());
             if (isDistinct(node) && child.getProperties().stream().anyMatch(node.getGroupingKeys()::containsAll)) {
+                planChanged = true;
                 return child;
             }
             ImmutableList.Builder<Set<VariableReferenceExpression>> properties = ImmutableList.builder();

@@ -66,20 +66,20 @@ public class TestTimeZoneUtils
                 // http://mm.icann.org/pipermail/tz-announce/2020-October/000059.html
                 continue;
             }
-
-            if (zoneId.equals("Pacific/Kanton")) {
-                // TODO: remove Once Joda version supports this Timezone.
-                // JDK supported this timezone, but not Joda and was resulting in the test failure.
-                // https://www.joda.org/joda-time/timezones.html
+            if (zoneId.equals("Europe/Zaporozhye")) {
+                // TODO: Remove once minimum Java version is increased 17.0.7
                 continue;
             }
-
+            if (zoneId.equals("Europe/Uzhgorod")) {
+                // TODO: Remove once minimum Java version is increased 17.0.7
+                continue;
+            }
+            if (zoneId.equals("Europe/Kiev")) {
+                // TODO: Remove once minimum Java version is increased 17.0.7
+                continue;
+            }
             if (zoneId.equals("Europe/Kyiv")) {
-                // TODO: remove Once this recently renamed Timezone is supported.
-                // Europe/Kiev was renamed to Europe/Kyiv.
-                // https://www.oracle.com/java/technologies/tzdata-versions.html
-                // Likely need to wait for Joda to supported this renamed timezone.
-                // https://www.joda.org/joda-time/timezones.html
+                // TODO: Remove once minimum Java version is increased 17.0.7
                 continue;
             }
 

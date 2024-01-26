@@ -1,4 +1,4 @@
-FROM centos:centos7.9.2009
+FROM quay.io/centos/centos:stream8
 
 ARG PRESTO_VERSION
 ARG PRESTO_PKG=presto-server-$PRESTO_VERSION.tar.gz
@@ -9,7 +9,8 @@ ENV PRESTO_HOME="/opt/presto-server"
 COPY $PRESTO_PKG .
 COPY $PRESTO_CLI_JAR /opt/presto-cli
 
-RUN yum install tar gzip java-11-amazon-corretto less procps -y \
+RUN dnf install -y java-11-openjdk less procps python3 \
+    && ln -s $(which python3) /usr/bin/python \
     # Download Presto and move \
     && tar -zxf $PRESTO_PKG \
     && mv ./presto-server-$PRESTO_VERSION $PRESTO_HOME \
@@ -19,17 +20,20 @@ RUN yum install tar gzip java-11-amazon-corretto less procps -y \
     && ln -s /opt/presto-cli /usr/local/bin/ \
     # clean cache jobs
     && mv /etc/yum/protected.d/systemd.conf /etc/yum/protected.d/systemd.conf.bak \
-    && yum remove -y tar \
-    && yum clean all \
+    && dnf clean all \
     #  mkdir for config
     && mkdir -p $PRESTO_HOME/etc \
     && mkdir -p $PRESTO_HOME/etc/catalog \
     && mkdir -p /var/lib/presto/data \
         && mkdir -p /usr/lib/presto/utils \
         # Download jmx prometheus exporter \
-        && curl -o /usr/lib/presto/utils/jmx_prometheus_javaagent-0.16.1.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.16.1/jmx_prometheus_javaagent-0.16.1.jar
+        && curl -o /usr/lib/presto/utils/jmx_prometheus_javaagent-0.20.0.jar https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/0.20.0/jmx_prometheus_javaagent-0.20.0.jar
 
-COPY etc $PRESTO_HOME/etc
+COPY etc/config.properties.example $PRESTO_HOME/etc/config.properties
+COPY etc/jvm.config.example $PRESTO_HOME/etc/jvm.config
+COPY etc/node.properties $PRESTO_HOME/etc/node.properties
 COPY entrypoint.sh /opt
+
+EXPOSE 8080
 
 ENTRYPOINT ["/opt/entrypoint.sh"]

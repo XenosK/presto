@@ -50,11 +50,15 @@ import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableLayoutFilterCoverage;
+import com.facebook.presto.spi.TableMetadata;
+import com.facebook.presto.spi.analyzer.MetadataResolver;
+import com.facebook.presto.spi.analyzer.ViewDefinition;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.connector.ConnectorPartitioningMetadata;
+import com.facebook.presto.spi.connector.ConnectorTableVersion;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.security.GrantInfo;
@@ -65,10 +69,7 @@ import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
-import com.facebook.presto.sql.analyzer.MetadataResolver;
-import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
-import com.facebook.presto.sql.analyzer.ViewDefinition;
 import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.facebook.presto.transaction.TransactionManager;
 import com.facebook.presto.type.TypeDeserializer;
@@ -123,9 +124,8 @@ import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.StandardErrorCode.SYNTAX_ERROR;
 import static com.facebook.presto.spi.TableLayoutFilterCoverage.NOT_APPLICABLE;
-import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
+import static com.facebook.presto.spi.analyzer.ViewDefinition.ViewColumn;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
-import static com.facebook.presto.sql.analyzer.ViewDefinition.ViewColumn;
 import static com.facebook.presto.transaction.InMemoryTransactionManager.createTestTransactionManager;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -305,12 +305,6 @@ public class MetadataManager
     }
 
     @Override
-    public Optional<TableHandle> getTableHandle(Session session, QualifiedObjectName table)
-    {
-        return getOptionalTableHandle(session, transactionManager, table);
-    }
-
-    @Override
     public Optional<TableHandle> getTableHandleForStatisticsCollection(Session session, QualifiedObjectName table, Map<String, Object> analyzeProperties)
     {
         requireNonNull(table, "table is null");
@@ -331,6 +325,12 @@ public class MetadataManager
             }
         }
         return Optional.empty();
+    }
+
+    @Override
+    public Optional<TableHandle> getHandleVersion(Session session, QualifiedObjectName tableName, Optional<ConnectorTableVersion> tableVersion)
+    {
+        return getOptionalTableHandle(session, transactionManager, tableName, tableVersion);
     }
 
     @Override
@@ -866,11 +866,19 @@ public class MetadataManager
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
     {
         ConnectorId connectorId = tableHandle.getConnectorId();
         ConnectorMetadata metadata = getMetadata(session, connectorId);
-        return metadata.getUpdateRowIdColumnHandle(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle());
+        return metadata.getDeleteRowIdColumnHandle(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle());
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        ConnectorId connectorId = tableHandle.getConnectorId();
+        ConnectorMetadata metadata = getMetadata(session, connectorId);
+        return metadata.getUpdateRowIdColumnHandle(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), updatedColumns);
     }
 
     @Override
@@ -911,6 +919,23 @@ public class MetadataManager
         ConnectorId connectorId = tableHandle.getConnectorId();
         ConnectorMetadata metadata = getMetadata(session, connectorId);
         metadata.finishDelete(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), fragments);
+    }
+
+    @Override
+    public TableHandle beginUpdate(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        ConnectorId connectorId = tableHandle.getConnectorId();
+        ConnectorMetadata metadata = getMetadataForWrite(session, connectorId);
+        ConnectorTableHandle newHandle = metadata.beginUpdate(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), updatedColumns);
+        return new TableHandle(tableHandle.getConnectorId(), newHandle, tableHandle.getTransaction(), tableHandle.getLayout());
+    }
+
+    @Override
+    public void finishUpdate(Session session, TableHandle tableHandle, Collection<Slice> fragments)
+    {
+        ConnectorId connectorId = tableHandle.getConnectorId();
+        ConnectorMetadata metadata = getMetadata(session, connectorId);
+        metadata.finishUpdate(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), fragments);
     }
 
     @Override
@@ -1015,10 +1040,9 @@ public class MetadataManager
         metadata.dropMaterializedView(session.toConnectorSession(connectorId), toSchemaTableName(viewName));
     }
 
-    @Override
-    public MaterializedViewStatus getMaterializedViewStatus(Session session, QualifiedObjectName materializedViewName, TupleDomain<String> baseQueryDomain)
+    private MaterializedViewStatus getMaterializedViewStatus(Session session, QualifiedObjectName materializedViewName, TupleDomain<String> baseQueryDomain)
     {
-        Optional<TableHandle> materializedViewHandle = getTableHandle(session, materializedViewName);
+        Optional<TableHandle> materializedViewHandle = getOptionalTableHandle(session, transactionManager, materializedViewName, Optional.empty());
 
         ConnectorId connectorId = materializedViewHandle.get().getConnectorId();
         ConnectorMetadata metadata = getMetadata(session, connectorId);
@@ -1330,18 +1354,25 @@ public class MetadataManager
             @Override
             public boolean tableExists(QualifiedObjectName tableName)
             {
-                return getOptionalTableHandle(session, transactionManager, tableName).isPresent();
+                return getOptionalTableHandle(session, transactionManager, tableName, Optional.empty()).isPresent();
             }
 
             @Override
-            public Optional<List<ColumnMetadata>> getColumns(QualifiedObjectName tableName)
+            public Optional<TableHandle> getTableHandle(QualifiedObjectName tableName)
             {
-                Optional<TableHandle> tableHandle = getOptionalTableHandle(session, transactionManager, tableName);
-                if (!tableHandle.isPresent()) {
-                    throw new SemanticException(MISSING_TABLE, "Table does not exist: " + tableName.toString());
-                }
-                TableMetadata tableMetadata = getTableMetadata(session, tableHandle.get());
-                return Optional.of(tableMetadata.getColumns());
+                return getOptionalTableHandle(session, transactionManager, tableName, Optional.empty());
+            }
+
+            @Override
+            public List<ColumnMetadata> getColumns(TableHandle tableHandle)
+            {
+                return getTableMetadata(session, tableHandle).getColumns();
+            }
+
+            @Override
+            public Map<String, ColumnHandle> getColumnHandles(TableHandle tableHandle)
+            {
+                return MetadataManager.this.getColumnHandles(session, tableHandle);
             }
 
             @Override
@@ -1383,9 +1414,9 @@ public class MetadataManager
             }
 
             @Override
-            public List<Type> getTypes()
+            public MaterializedViewStatus getMaterializedViewStatus(QualifiedObjectName materializedViewName, TupleDomain<String> baseQueryDomain)
             {
-                return functionAndTypeManager.getTypes();
+                return MetadataManager.this.getMaterializedViewStatus(session, materializedViewName, baseQueryDomain);
             }
         };
     }

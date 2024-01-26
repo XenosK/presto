@@ -281,7 +281,9 @@ S3 Configuration Properties
 Property Name                                Description
 ============================================ =================================================================
 ``hive.s3.use-instance-credentials``         Use the EC2 metadata service to retrieve API credentials
-                                             (defaults to ``true``). This works with IAM roles in EC2.
+                                             (defaults to ``false``). This works with IAM roles in EC2.
+
+                                              **Note:** This property is deprecated.
 
 ``hive.s3.aws-access-key``                   Default AWS access key to use.
 
@@ -348,15 +350,18 @@ S3 Credentials
 ^^^^^^^^^^^^^^
 
 If you are running Presto on Amazon EC2 using EMR or another facility,
-it is highly recommended that you set ``hive.s3.use-instance-credentials``
-to ``true`` and use IAM Roles for EC2 to govern access to S3. If this is
-the case, your EC2 instances will need to be assigned an IAM Role which
-grants appropriate access to the data stored in the S3 bucket(s) you wish
-to use. It's also possible to configure an IAM role with ``hive.s3.iam-role``
-that will be assumed for accessing any S3 bucket. This is much cleaner than
-setting AWS access and secret keys in the ``hive.s3.aws-access-key``
-and ``hive.s3.aws-secret-key`` settings, and also allows EC2 to automatically
-rotate credentials on a regular basis without any additional work on your part.
+it is recommended that you use IAM Roles for EC2 to govern access to S3. To enable this,
+your EC2 instances will need to be assigned an IAM Role which grants appropriate
+access to the data stored in the S3 bucket(s) you wish to use. It's also possible
+to configure an IAM role with ``hive.s3.iam-role`` that will be assumed for accessing
+any S3 bucket. This is much cleaner than setting AWS access and secret keys in the
+``hive.s3.aws-access-key`` and ``hive.s3.aws-secret-key`` settings, and also allows
+EC2 to automatically rotate credentials on a regular basis without any additional
+work on your part.
+
+After the introduction of DefaultAWSCredentialsProviderChain, if neither IAM role nor
+IAM credentials are configured, instance credentials will be used as they are the last item
+in the DefaultAWSCredentialsProviderChain.
 
 Custom S3 Credentials Provider
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -487,7 +492,16 @@ Enabling S3 Select Pushdown
 You can enable S3 Select Pushdown using the ``s3_select_pushdown_enabled``
 Hive session property or using the ``hive.s3select-pushdown.enabled``
 configuration property. The session property will override the config
-property, allowing you enable or disable on a per-query basis.
+property, allowing you enable or disable on a per-query basis. Non-filtering
+queries (``SELECT * FROM table``) are not pushed down to S3 Select,
+as they retrieve the entire object content.
+
+For uncompressed files, using supported formats and SerDes,
+S3 Select scans ranges of bytes in parallel.
+The scan range requests run across the byte ranges of the internal
+Hive splits for the query fragments pushed down to S3 Select.
+Parallelization is controlled by the existing ``hive.max-split-size``
+property.
 
 Understanding and Tuning the Maximum Connections
 ################################################
@@ -617,7 +631,7 @@ Column Type   Collectible Statistics
 ============= ====================================================================
 
 Automatic column level statistics collection on write is controlled by
-the ``collect-column-statistics-on-write`` catalog session property.
+the ``collect_column_statistics_on_write`` catalog session property.
 
 .. _hive_analyze:
 
@@ -651,6 +665,11 @@ connector supports this by allowing the same conversions as Hive:
 * ``varchar`` to and from ``tinyint``, ``smallint``, ``integer`` and ``bigint``
 * ``real`` to ``double``
 * Widening conversions for integers, such as ``tinyint`` to ``smallint``
+
+In adition to the conversions above, the Hive connector does also support the following conversions when working with Parquet file format:
+
+* ``integer`` to ``bigint``, ``real`` and ``double``
+* ``bigint`` to ``real`` and ``double``
 
 Any conversion failure will result in null, which is the same behavior
 as Hive. For example, converting the string ``'foo'`` to a number,
@@ -716,6 +735,13 @@ The following operations are not supported when ``avro_schema_url`` is set:
 * Using partitioning(``partitioned_by``) or bucketing(``bucketed_by``) columns are not supported in ``CREATE TABLE``.
 * ``ALTER TABLE`` commands modifying columns are not supported.
 
+Parquet Writer Version
+----------------------
+
+Presto now supports Parquet writer versions V1 and V2 for the Hive catalog.
+It can be toggled using the session property ``parquet_writer_version`` and the config property ``hive.parquet.writer.version``.
+Valid values for these properties are ``PARQUET_1_0`` and ``PARQUET_2_0``. Default is ``PARQUET_2_0``.
+
 Procedures
 ----------
 
@@ -753,6 +779,26 @@ columns as a part of SQL query like any other columns of the table.
 * ``$path`` : Filepath for the given row data
 * ``$file_size`` : Filesize for the given row
 * ``$file_modified_time`` : Last file modified time for the given row
+
+How to invalidate metastore cache?
+---------------------------------
+
+The Hive connector exposes a procedure over JMX (``com.facebook.presto.hive.metastore.CachingHiveMetastore#flushCache``) to invalidate the metastore cache.
+You can call this procedure to invalidate the metastore cache by connecting via jconsole or jmxterm.
+
+This is useful when the Hive metastore is updated outside of Presto and you want to make the changes visible to Presto immediately.
+
+Currently, this procedure flushes the cache for all the tables in all the schemas. This is a known limitation and will be enhanced in the future.
+
+How to invalidate directory list cache?
+---------------------------------------
+
+The Hive connector exposes a procedure over JMX (``com.facebook.presto.hive.HiveDirectoryLister#flushCache``) to invalidate the directory list cache.
+You can call this procedure to invalidate the directory list cache by connecting via jconsole or jmxterm.
+
+This is useful when the files are added or deleted in the cache directory path and you want to make the changes visible to Presto immediately.
+
+Currently, this procedure flushes all the cache entries. This is a known limitation and will be enhanced in the future.
 
 Examples
 --------

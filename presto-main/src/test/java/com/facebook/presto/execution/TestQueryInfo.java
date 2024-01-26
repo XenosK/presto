@@ -18,6 +18,7 @@ import com.facebook.airlift.json.JsonCodec;
 import com.facebook.airlift.json.JsonModule;
 import com.facebook.presto.common.plan.PlanCanonicalizationStrategy;
 import com.facebook.presto.common.resourceGroups.QueryType;
+import com.facebook.presto.common.transaction.TransactionId;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.cost.StatsAndCosts;
@@ -32,6 +33,7 @@ import com.facebook.presto.spi.WarningCode;
 import com.facebook.presto.spi.memory.MemoryPoolId;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.ValuesNode;
+import com.facebook.presto.spi.prestospark.PrestoSparkExecutionContext;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.sql.Serialization;
@@ -42,7 +44,6 @@ import com.facebook.presto.sql.planner.CanonicalPlanWithInfo;
 import com.facebook.presto.sql.planner.PlanNodeCanonicalInfo;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.transaction.TransactionId;
 import com.facebook.presto.type.TypeDeserializer;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -122,6 +123,7 @@ public class TestQueryInfo
         assertEquals(actual.getRemovedSessionFunctions(), expected.getRemovedSessionFunctions());
         // Test that planCanonicalInfo is not serialized
         assertEquals(actual.getPlanCanonicalInfo(), ImmutableList.of());
+        assertEquals(actual.getPrestoSparkExecutionContext(), expected.getPrestoSparkExecutionContext());
     }
 
     private static JsonCodec<QueryInfo> createJsonCodec()
@@ -186,16 +188,22 @@ public class TestQueryInfo
                 true,
                 Optional.empty(),
                 Optional.of(QueryType.SELECT),
-                Optional.of(ImmutableList.of(new TaskId("0", 1, 1, 1))),
+                Optional.of(ImmutableList.of(new TaskId("0", 1, 1, 1, 0))),
                 Optional.of(ImmutableList.of(new StageId("0", 1))),
                 ImmutableMap.of(),
                 ImmutableSet.of(),
                 StatsAndCosts.empty(),
                 ImmutableList.of(),
+                ImmutableList.of(),
+                ImmutableSet.of(),
+                ImmutableSet.of(),
+                ImmutableSet.of(),
                 ImmutableList.of(new CanonicalPlanWithInfo(
                         new CanonicalPlan(
                                 new ValuesNode(Optional.empty(), new PlanNodeId("0"), ImmutableList.of(), ImmutableList.of(), Optional.empty()),
                                 PlanCanonicalizationStrategy.DEFAULT),
-                        new PlanNodeCanonicalInfo("a", ImmutableList.of()))));
+                        new PlanNodeCanonicalInfo("a", ImmutableList.of()))),
+                ImmutableMap.of(),
+                Optional.of(PrestoSparkExecutionContext.create(1024, 300, true, false)));
     }
 }

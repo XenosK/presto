@@ -16,6 +16,7 @@ package com.facebook.presto.sql.planner.optimizations;
 import com.facebook.presto.Session;
 import com.facebook.presto.expressions.DefaultRowExpressionTraversalVisitor;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.AggregationNode.Aggregation;
@@ -27,7 +28,6 @@ import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.RowExpressionVariableInliner;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
@@ -87,6 +87,7 @@ public class RewriteIfOverAggregation
         implements PlanOptimizer
 {
     private final FunctionAndTypeManager functionAndTypeManager;
+    private boolean isEnabledForTesting;
 
     public RewriteIfOverAggregation(FunctionAndTypeManager functionAndTypeManager)
     {
@@ -94,29 +95,43 @@ public class RewriteIfOverAggregation
     }
 
     @Override
-    public PlanNode optimize(PlanNode plan,
+    public void setEnabledForTesting(boolean isSet)
+    {
+        isEnabledForTesting = isSet;
+    }
+
+    @Override
+    public boolean isEnabled(Session session)
+    {
+        return isEnabledForTesting || isOptimizeConditionalAggregationEnabled(session);
+    }
+
+    @Override
+    public PlanOptimizerResult optimize(PlanNode plan,
             Session session,
             TypeProvider types,
-            PlanVariableAllocator variableAllocator,
+            VariableAllocator variableAllocator,
             PlanNodeIdAllocator idAllocator,
             WarningCollector warningCollector)
     {
-        if (isOptimizeConditionalAggregationEnabled(session)) {
-            return SimplePlanRewriter.rewriteWith(
-                    new Rewriter(variableAllocator, idAllocator, new RowExpressionDeterminismEvaluator(functionAndTypeManager)), plan, ImmutableMap.of());
+        if (isEnabled(session)) {
+            Rewriter rewriter = new Rewriter(variableAllocator, idAllocator, new RowExpressionDeterminismEvaluator(functionAndTypeManager));
+            PlanNode rewrittenPlan = SimplePlanRewriter.rewriteWith(rewriter, plan, ImmutableMap.of());
+            return PlanOptimizerResult.optimizerResult(rewrittenPlan, rewriter.isPlanChanged());
         }
-        return plan;
+        return PlanOptimizerResult.optimizerResult(plan, false);
     }
 
     // Map<VariableReferenceExpression, RowExpression> stores the candidate IF expressions for rewrite.
     private static class Rewriter
             extends SimplePlanRewriter<Map<VariableReferenceExpression, RowExpression>>
     {
-        private final PlanVariableAllocator planVariableAllocator;
+        private final VariableAllocator planVariableAllocator;
         private final PlanNodeIdAllocator planNodeIdAllocator;
         private final RowExpressionDeterminismEvaluator determinismEvaluator;
+        private boolean planChanged;
 
-        private Rewriter(PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, RowExpressionDeterminismEvaluator determinismEvaluator)
+        private Rewriter(VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, RowExpressionDeterminismEvaluator determinismEvaluator)
         {
             this.planVariableAllocator = variableAllocator;
             this.planNodeIdAllocator = idAllocator;
@@ -133,6 +148,11 @@ public class RewriteIfOverAggregation
         private static RowExpression inlineReferences(RowExpression expression, Assignments assignments)
         {
             return RowExpressionVariableInliner.inlineVariables(variable -> assignments.getMap().getOrDefault(variable, variable), expression);
+        }
+
+        public boolean isPlanChanged()
+        {
+            return planChanged;
         }
 
         @Override
@@ -210,6 +230,7 @@ public class RewriteIfOverAggregation
             newAggregations.putAll(
                     node.getAggregations().entrySet().stream().filter(x -> !candidate.containsKey(x.getKey())).collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue)));
 
+            planChanged = true;
             AggregationNode aggregationNode = new AggregationNode(
                     node.getSourceLocation(),
                     node.getId(),
@@ -219,7 +240,8 @@ public class RewriteIfOverAggregation
                     node.getPreGroupedVariables(),
                     node.getStep(),
                     node.getHashVariable(),
-                    node.getGroupIdVariable());
+                    node.getGroupIdVariable(),
+                    node.getAggregationId());
 
             return context.defaultRewrite(aggregationNode, ImmutableMap.of());
         }

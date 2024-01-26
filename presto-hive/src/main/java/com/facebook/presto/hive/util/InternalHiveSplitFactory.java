@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+import static com.facebook.presto.hive.HiveUtil.isSelectSplittable;
 import static com.facebook.presto.hive.HiveUtil.isSplittable;
 import static com.facebook.presto.hive.util.CustomSplitConversionUtils.extractCustomSplitInfo;
 import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.HARD_AFFINITY;
@@ -83,33 +84,35 @@ public class InternalHiveSplitFactory
         checkArgument(minimumTargetSplitSizeInBytes > 0, "minimumTargetSplitSize must be > 0, found: %s", minimumTargetSplitSize);
     }
 
-    public Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo fileInfo, boolean splittable)
+    public Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo hiveFileInfo, boolean splittable)
     {
-        return createInternalHiveSplit(fileInfo, OptionalInt.empty(), OptionalInt.empty(), splittable);
+        return createInternalHiveSplit(hiveFileInfo, OptionalInt.empty(), OptionalInt.empty(), splittable);
     }
 
-    public Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo fileInfo, int readBucketNumber, int tableBucketNumber, boolean splittable)
+    public Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo hiveFileInfo, int readBucketNumber, int tableBucketNumber, boolean splittable)
     {
-        return createInternalHiveSplit(fileInfo, OptionalInt.of(readBucketNumber), OptionalInt.of(tableBucketNumber), splittable);
+        return createInternalHiveSplit(hiveFileInfo, OptionalInt.of(readBucketNumber), OptionalInt.of(tableBucketNumber), splittable);
     }
 
-    private Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo fileInfo, OptionalInt readBucketNumber, OptionalInt tableBucketNumber, boolean splittable)
+    private Optional<InternalHiveSplit> createInternalHiveSplit(HiveFileInfo hiveFileInfo, OptionalInt readBucketNumber, OptionalInt tableBucketNumber, boolean splittable)
     {
         splittable = splittable &&
-                fileInfo.getLength() > minimumTargetSplitSizeInBytes &&
-                isSplittable(inputFormat, fileSystem, fileInfo.getPath());
+                hiveFileInfo.getLength() > minimumTargetSplitSizeInBytes &&
+                (s3SelectPushdownEnabled ?
+                        isSelectSplittable(inputFormat, hiveFileInfo.getPath(), s3SelectPushdownEnabled) :
+                        isSplittable(inputFormat, fileSystem, hiveFileInfo.getPath()));
         return createInternalHiveSplit(
-                fileInfo.getPath(),
-                fileInfo.getBlockLocations(),
+                hiveFileInfo.getPath(),
+                hiveFileInfo.getBlockLocations(),
                 0,
-                fileInfo.getLength(),
-                fileInfo.getLength(),
-                fileInfo.getFileModifiedTime(),
+                hiveFileInfo.getLength(),
+                hiveFileInfo.getLength(),
+                hiveFileInfo.getFileModifiedTime(),
                 readBucketNumber,
                 tableBucketNumber,
                 splittable,
-                fileInfo.getExtraFileInfo(),
-                fileInfo.getCustomSplitInfo());
+                hiveFileInfo.getExtraFileInfo(),
+                hiveFileInfo.getCustomSplitInfo());
     }
 
     public Optional<InternalHiveSplit> createInternalHiveSplit(FileSplit split)

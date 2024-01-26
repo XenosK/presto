@@ -21,12 +21,17 @@ import com.facebook.presto.cost.StatsCalculator;
 import com.facebook.presto.execution.Input;
 import com.facebook.presto.execution.Output;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.security.AccessControl;
-import com.facebook.presto.spark.PhysicalResourceSettings;
 import com.facebook.presto.spark.PrestoSparkPhysicalResourceCalculator;
 import com.facebook.presto.spark.PrestoSparkSourceStatsCollector;
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.plan.OutputNode;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.prestospark.PhysicalResourceSettings;
+import com.facebook.presto.spi.security.AccessControl;
+import com.facebook.presto.sql.Optimizer;
 import com.facebook.presto.sql.analyzer.Analysis;
 import com.facebook.presto.sql.analyzer.Analyzer;
 import com.facebook.presto.sql.analyzer.BuiltInQueryPreparer.BuiltInPreparedQuery;
@@ -39,20 +44,30 @@ import com.facebook.presto.sql.planner.OutputExtractor;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.PlanCanonicalInfoProvider;
 import com.facebook.presto.sql.planner.PlanOptimizers;
-import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.sanity.PlanChecker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import org.apache.spark.SparkContext;
 
 import javax.inject.Inject;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.SystemSessionProperties.getHashPartitionCount;
+import static com.facebook.presto.SystemSessionProperties.isLogInvokedFunctionNamesEnabled;
+import static com.facebook.presto.common.RuntimeMetricName.LOGICAL_PLANNER_TIME_NANOS;
+import static com.facebook.presto.common.RuntimeMetricName.OPTIMIZER_TIME_NANOS;
+import static com.facebook.presto.spark.PrestoSparkSettingsRequirements.SPARK_DYNAMIC_ALLOCATION_MAX_EXECUTORS_CONFIG;
+import static com.facebook.presto.spi.function.FunctionKind.AGGREGATE;
+import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
+import static com.facebook.presto.spi.function.FunctionKind.WINDOW;
+import static com.facebook.presto.sql.Optimizer.PlanStage.OPTIMIZED_AND_VALIDATED;
 import static com.facebook.presto.sql.analyzer.utils.ParameterUtils.parameterExtractor;
 import static com.facebook.presto.sql.analyzer.utils.StatementUtils.getQueryType;
-import static com.facebook.presto.sql.planner.LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED;
 import static com.facebook.presto.sql.planner.PlanNodeCanonicalInfo.getCanonicalInfo;
 import static java.util.Objects.requireNonNull;
 
@@ -91,10 +106,8 @@ public class PrestoSparkQueryPlanner
         this.planCanonicalInfoProvider = requireNonNull(historyBasedPlanStatisticsManager, "historyBasedPlanStatisticsManager is null").getPlanCanonicalInfoProvider();
     }
 
-    public PlanAndMore createQueryPlan(Session session, BuiltInPreparedQuery preparedQuery, WarningCollector warningCollector)
+    public PlanAndMore createQueryPlan(Session session, BuiltInPreparedQuery preparedQuery, WarningCollector warningCollector, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, SparkContext sparkContext)
     {
-        PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
-
         Analyzer analyzer = new Analyzer(
                 session,
                 metadata,
@@ -105,26 +118,53 @@ public class PrestoSparkQueryPlanner
                 parameterExtractor(preparedQuery.getStatement(), preparedQuery.getParameters()),
                 warningCollector);
 
+        Analysis analysis = analyzer.analyze(preparedQuery.getStatement());
+
         LogicalPlanner logicalPlanner = new LogicalPlanner(
-                false,
                 session,
-                optimizers.getPlanningTimeOptimizers(),
                 idAllocator,
                 metadata,
+                variableAllocator,
+                sqlParser);
+
+        PlanNode planNode = session.getRuntimeStats().profileNanos(
+                LOGICAL_PLANNER_TIME_NANOS,
+                () -> logicalPlanner.plan(analysis));
+
+        Optimizer optimizer = new Optimizer(
+                session,
+                metadata,
+                optimizers.getPlanningTimeOptimizers(),
+                planChecker,
                 sqlParser,
+                variableAllocator,
+                idAllocator,
+                warningCollector,
                 statsCalculator,
                 costCalculator,
-                warningCollector,
-                planChecker);
+                false);
 
-        Analysis analysis = analyzer.analyze(preparedQuery.getStatement());
-        Plan plan = logicalPlanner.plan(analysis, OPTIMIZED_AND_VALIDATED);
+        Plan plan = session.getRuntimeStats().profileNanos(
+                OPTIMIZER_TIME_NANOS,
+                () -> optimizer.validateAndOptimizePlan(planNode, OPTIMIZED_AND_VALIDATED));
+
         List<Input> inputs = new InputExtractor(metadata, session).extractInputs(plan.getRoot());
         Optional<Output> output = new OutputExtractor().extractOutput(plan.getRoot());
         Optional<QueryType> queryType = getQueryType(preparedQuery.getStatement().getClass());
         List<String> columnNames = ((OutputNode) plan.getRoot()).getColumnNames();
-        PhysicalResourceSettings physicalResourceSettings = new PrestoSparkPhysicalResourceCalculator()
+        PrestoSparkPhysicalResourceCalculator prestoSparkPhysicalResourceCalculator = new PrestoSparkPhysicalResourceCalculator(
+                getHashPartitionCount(session),
+                sparkContext.getConf().getInt(SPARK_DYNAMIC_ALLOCATION_MAX_EXECUTORS_CONFIG, 0));
+        PhysicalResourceSettings physicalResourceSettings = prestoSparkPhysicalResourceCalculator
                 .calculate(plan.getRoot(), new PrestoSparkSourceStatsCollector(metadata, session), session);
+        Map<FunctionKind, Set<String>> functionsInvoked = Collections.emptyMap();
+        if (isLogInvokedFunctionNamesEnabled(session)) {
+            functionsInvoked = analysis.getInvokedFunctions();
+        }
+        Set<String> invokedScalarFunctions = functionsInvoked.getOrDefault(SCALAR, Collections.emptySet());
+        Set<String> invokedAggregateFunctions = functionsInvoked.getOrDefault(AGGREGATE, Collections.emptySet());
+        Set<String> invokedWindowFunctions = functionsInvoked.getOrDefault(WINDOW, Collections.emptySet());
+
         return new PlanAndMore(
                 plan,
                 Optional.ofNullable(analysis.getUpdateType()),
@@ -133,7 +173,10 @@ public class PrestoSparkQueryPlanner
                 output,
                 queryType,
                 physicalResourceSettings,
-                getCanonicalInfo(session, plan.getRoot(), planCanonicalInfoProvider));
+                getCanonicalInfo(session, plan.getRoot(), planCanonicalInfoProvider),
+                invokedScalarFunctions,
+                invokedAggregateFunctions,
+                invokedWindowFunctions);
     }
 
     public static class PlanAndMore
@@ -146,6 +189,9 @@ public class PrestoSparkQueryPlanner
         private final Optional<QueryType> queryType;
         private final PhysicalResourceSettings physicalResourceSettings;
         private final List<CanonicalPlanWithInfo> planCanonicalInfo;
+        private final Set<String> invokedScalarFunctions;
+        private final Set<String> invokedAggregateFunctions;
+        private final Set<String> invokedWindowFunctions;
 
         public PlanAndMore(
                 Plan plan,
@@ -155,7 +201,10 @@ public class PrestoSparkQueryPlanner
                 Optional<Output> output,
                 Optional<QueryType> queryType,
                 PhysicalResourceSettings physicalResourceSettings,
-                List<CanonicalPlanWithInfo> planCanonicalInfo)
+                List<CanonicalPlanWithInfo> planCanonicalInfo,
+                Set<String> invokedScalarFunctions,
+                Set<String> invokedAggregateFunctions,
+                Set<String> invokedWindowFunctions)
         {
             this.plan = requireNonNull(plan, "plan is null");
             this.updateType = requireNonNull(updateType, "updateType is null");
@@ -165,6 +214,9 @@ public class PrestoSparkQueryPlanner
             this.queryType = requireNonNull(queryType, "queryType is null");
             this.physicalResourceSettings = requireNonNull(physicalResourceSettings, "physicalResourceSetting is null.");
             this.planCanonicalInfo = requireNonNull(planCanonicalInfo, "planCanonicalInfo is null");
+            this.invokedScalarFunctions = requireNonNull(invokedScalarFunctions, "invokedScalarFunctions is null");
+            this.invokedAggregateFunctions = requireNonNull(invokedAggregateFunctions, "invokedAggregateFunctions is null");
+            this.invokedWindowFunctions = requireNonNull(invokedWindowFunctions, "invokedWindowFunctions is null");
         }
 
         public Plan getPlan()
@@ -205,6 +257,21 @@ public class PrestoSparkQueryPlanner
         public List<CanonicalPlanWithInfo> getPlanCanonicalInfo()
         {
             return planCanonicalInfo;
+        }
+
+        public Set<String> getInvokedScalarFunctions()
+        {
+            return invokedScalarFunctions;
+        }
+
+        public Set<String> getInvokedAggregateFunctions()
+        {
+            return invokedAggregateFunctions;
+        }
+
+        public Set<String> getInvokedWindowFunctions()
+        {
+            return invokedWindowFunctions;
         }
     }
 }

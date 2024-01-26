@@ -13,8 +13,6 @@
  */
 package com.facebook.presto.hive;
 
-import com.facebook.presto.cache.CacheConfig;
-import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.hive.AbstractTestHiveClient.HiveTransaction;
 import com.facebook.presto.hive.AbstractTestHiveClient.Transaction;
@@ -28,7 +26,6 @@ import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutResult;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.SplitContext;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
@@ -46,7 +43,9 @@ import java.util.stream.IntStream;
 
 import static com.facebook.presto.hive.AbstractTestHiveClient.getAllSplits;
 import static com.facebook.presto.hive.AbstractTestHiveFileSystem.SPLIT_SCHEDULING_CONTEXT;
+import static com.facebook.presto.hive.HiveTestUtils.getAllSessionProperties;
 import static com.facebook.presto.hive.HiveTestUtils.getTypes;
+import static com.facebook.presto.spi.SplitContext.NON_CACHEABLE;
 import static com.facebook.presto.testing.MaterializedResult.materializeSourceDataStream;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -96,7 +95,7 @@ public class HiveFileSystemTestUtils
                         split,
                         tableHandle.getLayout().get(),
                         columnHandles,
-                        new SplitContext(false, TupleDomain.none()))) {
+                        NON_CACHEABLE)) {
                     MaterializedResult pageSourceResult = materializeSourceDataStream(session, pageSource, allTypes);
                     for (MaterializedRow row : pageSourceResult.getMaterializedRows()) {
                         Object[] dataValues = IntStream.range(0, row.getFieldCount())
@@ -154,7 +153,7 @@ public class HiveFileSystemTestUtils
                         split,
                         tableHandle.getLayout().get(),
                         projectedColumns,
-                        new SplitContext(false, TupleDomain.none()))) {
+                        NON_CACHEABLE)) {
                     MaterializedResult pageSourceResult = materializeSourceDataStream(session, pageSource, allTypes);
                     for (MaterializedRow row : pageSourceResult.getMaterializedRows()) {
                         Object[] dataValues = IntStream.range(0, row.getFieldCount())
@@ -173,6 +172,36 @@ public class HiveFileSystemTestUtils
         }
     }
 
+    public static int getSplitsCount(SchemaTableName tableName,
+            HiveTransactionManager transactionManager,
+            HiveClientConfig config,
+            HiveMetadataFactory metadataFactory,
+            ConnectorSplitManager splitManager)
+    {
+        ConnectorMetadata metadata = null;
+        ConnectorSession session = null;
+        ConnectorSplitSource splitSource = null;
+
+        try (Transaction transaction = newTransaction(transactionManager, metadataFactory.get())) {
+            metadata = transaction.getMetadata();
+            session = newSession(config);
+
+            ConnectorTableHandle table = getTableHandle(metadata, tableName, session);
+            List<ConnectorTableLayoutResult> tableLayoutResults = metadata.getTableLayouts(session, table, Constraint.alwaysTrue(), Optional.empty());
+            HiveTableLayoutHandle layoutHandle = (HiveTableLayoutHandle) getOnlyElement(tableLayoutResults).getTableLayout().getHandle();
+            TableHandle tableHandle = new TableHandle(new ConnectorId(tableName.getSchemaName()), table, transaction.getTransactionHandle(), Optional.of(layoutHandle));
+
+            metadata.beginQuery(session);
+            splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, tableHandle.getLayout().get(), SPLIT_SCHEDULING_CONTEXT);
+
+            return getAllSplits(splitSource).size();
+        }
+        finally {
+            cleanUpQuery(metadata, session);
+            closeQuietly(splitSource);
+        }
+    }
+
     public static Transaction newTransaction(HiveTransactionManager transactionManager, HiveMetadata hiveMetadata)
     {
         return new HiveTransaction(transactionManager, hiveMetadata);
@@ -180,11 +209,7 @@ public class HiveFileSystemTestUtils
 
     public static ConnectorSession newSession(HiveClientConfig config)
     {
-        return new TestingConnectorSession(new HiveSessionProperties(
-                config,
-                new OrcFileWriterConfig(),
-                new ParquetFileWriterConfig(),
-                new CacheConfig()).getSessionProperties());
+        return new TestingConnectorSession(getAllSessionProperties(config, new HiveCommonClientConfig()));
     }
 
     public static ConnectorTableHandle getTableHandle(ConnectorMetadata metadata, SchemaTableName tableName, ConnectorSession session)

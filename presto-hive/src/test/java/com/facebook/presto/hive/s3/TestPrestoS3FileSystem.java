@@ -414,7 +414,7 @@ public class TestPrestoS3FileSystem
             s3.setGetObjectMetadataHttpCode(HTTP_NOT_FOUND);
             fs.initialize(new URI("s3n://test-bucket/"), new Configuration());
             fs.setS3Client(s3);
-            assertEquals(fs.getS3ObjectMetadata(new Path("s3n://test-bucket/test")), null);
+            assertEquals(fs.getS3ObjectMetadata(new Path("s3n://test-bucket/test")).getObjectMetadata(), null);
         }
     }
 
@@ -547,7 +547,7 @@ public class TestPrestoS3FileSystem
             fs.initialize(new URI("s3n://test-bucket/"), config);
             fs.setS3Client(s3);
             FileStatus[] statuses = fs.listStatus(new Path("s3n://test-bucket/test"));
-            assertEquals(statuses.length, skipGlacierObjects ? 1 : 2);
+            assertEquals(statuses.length, skipGlacierObjects ? 1 : 3);
         }
     }
 

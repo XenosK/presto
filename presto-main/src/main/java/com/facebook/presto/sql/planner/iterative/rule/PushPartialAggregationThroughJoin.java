@@ -18,6 +18,8 @@ import com.facebook.presto.matching.Capture;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.plan.EquiJoinClause;
+import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.TypeProvider;
@@ -85,16 +87,18 @@ public class PushPartialAggregationThroughJoin
     {
         JoinNode joinNode = captures.get(JOIN_NODE);
 
-        if (joinNode.getType() != JoinNode.Type.INNER) {
+        if (joinNode.getType() != JoinType.INNER) {
             return Result.empty();
         }
 
         // TODO: leave partial aggregation above Join?
-        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables(), context.getVariableAllocator().getTypes())) {
+        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputVariables(), TypeProvider.viewOf(context.getVariableAllocator().getVariables()))) {
             return Result.ofPlanNode(pushPartialToLeftChild(aggregationNode, joinNode, context));
         }
-        else if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables(), context.getVariableAllocator().getTypes())) {
-            return Result.ofPlanNode(pushPartialToRightChild(aggregationNode, joinNode, context));
+        else {
+            if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputVariables(), TypeProvider.viewOf(context.getVariableAllocator().getVariables()))) {
+                return Result.ofPlanNode(pushPartialToRightChild(aggregationNode, joinNode, context));
+            }
         }
 
         return Result.empty();
@@ -129,8 +133,8 @@ public class PushPartialAggregationThroughJoin
     private Set<VariableReferenceExpression> getJoinRequiredVariables(JoinNode node)
     {
         return Streams.concat(
-                node.getCriteria().stream().map(JoinNode.EquiJoinClause::getLeft),
-                node.getCriteria().stream().map(JoinNode.EquiJoinClause::getRight),
+                node.getCriteria().stream().map(EquiJoinClause::getLeft),
+                node.getCriteria().stream().map(EquiJoinClause::getRight),
                 node.getFilter().map(expression -> VariablesExtractor.extractUnique(expression)).orElse(ImmutableSet.of()).stream(),
                 node.getLeftHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream(),
                 node.getRightHashVariable().map(ImmutableSet::of).orElse(ImmutableSet.of()).stream())
@@ -169,7 +173,8 @@ public class PushPartialAggregationThroughJoin
                 ImmutableList.of(),
                 aggregation.getStep(),
                 aggregation.getHashVariable(),
-                aggregation.getGroupIdVariable());
+                aggregation.getGroupIdVariable(),
+                aggregation.getAggregationId());
     }
 
     private PlanNode pushPartialToJoin(
@@ -195,6 +200,6 @@ public class PushPartialAggregationThroughJoin
                 child.getRightHashVariable(),
                 child.getDistributionType(),
                 child.getDynamicFilters());
-        return restrictOutputs(context.getIdAllocator(), joinNode, ImmutableSet.copyOf(aggregation.getOutputVariables()), false).orElse(joinNode);
+        return restrictOutputs(context.getIdAllocator(), joinNode, ImmutableSet.copyOf(aggregation.getOutputVariables())).orElse(joinNode);
     }
 }

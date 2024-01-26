@@ -34,6 +34,7 @@ import com.facebook.presto.spi.function.SqlInvokedScalarFunctionImplementation;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
+import com.facebook.presto.spi.relation.IntermediateFormExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.RowExpressionVisitor;
@@ -152,7 +153,7 @@ public class RowExpressionInterpreter
         this.optimizationLevel = optimizationLevel;
         this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionAndTypeManager());
         this.determinismEvaluator = new RowExpressionDeterminismEvaluator(metadata.getFunctionAndTypeManager());
-        this.resolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
+        this.resolution = new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver());
         this.functionAndTypeManager = metadata.getFunctionAndTypeManager();
 
         this.visitor = new Visitor();
@@ -254,7 +255,11 @@ public class RowExpressionInterpreter
             }
 
             if (functionMetadata.getFunctionKind() != SCALAR) {
-                return call(node.getDisplayName(), functionHandle, node.getType(), toRowExpressions(argumentValues, node.getArguments()));
+                if (optimizationLevel.ordinal() < EVALUATED.ordinal()) {
+                    return call(node.getDisplayName(), functionHandle, node.getType(), toRowExpressions(argumentValues, node.getArguments()));
+                }
+
+                throw new RuntimeException("Cannot evaluate non-scalar function: " + node.getDisplayName());
             }
 
             // do not optimize non-deterministic functions
@@ -281,7 +286,7 @@ public class RowExpressionInterpreter
                 RowExpression function = getSqlFunctionRowExpression(
                         functionMetadata,
                         functionImplementation,
-                        metadata,
+                        metadata.getFunctionAndTypeManager(),
                         session.getSqlFunctionProperties(),
                         session.getSessionFunctions(),
                         node.getArguments());
@@ -327,6 +332,12 @@ public class RowExpressionInterpreter
                             .collect(toImmutableList()),
                     node.getArguments(),
                     map -> body.accept(this, new LambdaVariableResolver(map)));
+        }
+
+        @Override
+        public Object visitIntermediateFormExpression(IntermediateFormExpression intermediateFormExpression, Object context)
+        {
+            return intermediateFormExpression;
         }
 
         @Override
@@ -575,10 +586,10 @@ public class RowExpressionInterpreter
 
                     if (hasUnresolvedValue) {
                         List<RowExpression> simplifiedExpressionValues = Stream.concat(
-                                Stream.concat(
-                                        Stream.of(toRowExpression(target, node.getArguments().get(0))),
-                                        unresolvedValues.stream().filter(determinismEvaluator::isDeterministic).distinct()),
-                                unresolvedValues.stream().filter((expression -> !determinismEvaluator.isDeterministic(expression))))
+                                        Stream.concat(
+                                                Stream.of(toRowExpression(target, node.getArguments().get(0))),
+                                                unresolvedValues.stream().filter(determinismEvaluator::isDeterministic).distinct()),
+                                        unresolvedValues.stream().filter((expression -> !determinismEvaluator.isDeterministic(expression))))
                                 .collect(toImmutableList());
                         return new SpecialFormExpression(IN, node.getType(), simplifiedExpressionValues);
                     }
@@ -860,7 +871,7 @@ public class RowExpressionInterpreter
 
         private SpecialCallResult tryHandleLike(CallExpression callExpression, List<Object> argumentValues, List<Type> argumentTypes, Object context)
         {
-            FunctionResolution resolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
+            FunctionResolution resolution = new FunctionResolution(metadata.getFunctionAndTypeManager().getFunctionAndTypeResolver());
             checkArgument(resolution.isLikeFunction(callExpression.getFunctionHandle()));
             checkArgument(callExpression.getArguments().size() == 2);
             RowExpression likePatternExpression = callExpression.getArguments().get(1);

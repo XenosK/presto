@@ -14,10 +14,10 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
-import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
@@ -30,16 +30,24 @@ public class ReplicateSemiJoinInDelete
         implements PlanOptimizer
 {
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanVariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    public PlanOptimizerResult optimize(PlanNode plan, Session session, TypeProvider types, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
-        return SimplePlanRewriter.rewriteWith(new Rewriter(), plan);
+        Rewriter rewriter = new Rewriter();
+        PlanNode rewrittenPlan = SimplePlanRewriter.rewriteWith(rewriter, plan);
+        return PlanOptimizerResult.optimizerResult(rewrittenPlan, rewriter.isPlanChanged());
     }
 
     private static class Rewriter
             extends SimplePlanRewriter<Void>
     {
         private boolean isDeleteQuery;
+        private boolean planChanged;
+
+        public boolean isPlanChanged()
+        {
+            return planChanged;
+        }
 
         @Override
         public PlanNode visitSemiJoin(SemiJoinNode node, RewriteContext<Void> context)
@@ -61,6 +69,7 @@ public class ReplicateSemiJoinInDelete
                     node.getDynamicFilters());
 
             if (isDeleteQuery) {
+                planChanged = true;
                 return rewrittenNode.withDistributionType(REPLICATED);
             }
 

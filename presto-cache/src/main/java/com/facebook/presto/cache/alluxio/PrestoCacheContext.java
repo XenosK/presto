@@ -45,7 +45,6 @@ public class PrestoCacheContext
         }
         return context;
     }
-
     private PrestoCacheContext(HiveFileContext hiveFileContext)
     {
         this.hiveFileContext = requireNonNull(hiveFileContext, "hiveFileContext is null");

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
+import com.facebook.presto.spi.plan.JoinType;
 import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.TestTableConstraintsConnectorFactory;
@@ -20,7 +21,6 @@ import com.facebook.presto.sql.planner.assertions.ExpectedValueProvider;
 import com.facebook.presto.sql.planner.iterative.properties.LogicalPropertiesProviderImpl;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.RuleTester;
-import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.google.common.collect.ImmutableList;
@@ -53,7 +53,7 @@ public class TestRedundantAggregateDistinctRemoval
     public final void setUp()
     {
         tester = new RuleTester(emptyList(), ImmutableMap.of(USE_MARK_DISTINCT, Boolean.toString(false), "exploit_constraints", Boolean.toString(true)), Optional.of(1), new TestTableConstraintsConnectorFactory(1));
-        logicalPropertiesProvider = new LogicalPropertiesProviderImpl(new FunctionResolution(tester.getMetadata().getFunctionAndTypeManager()));
+        logicalPropertiesProvider = new LogicalPropertiesProviderImpl(new FunctionResolution(tester.getMetadata().getFunctionAndTypeManager().getFunctionAndTypeResolver()));
     }
 
     @Test
@@ -142,7 +142,7 @@ public class TestRedundantAggregateDistinctRemoval
                 .matches(output(anyTree(
                         aggregation(
                                 aggregations,
-                                join(JoinNode.Type.INNER,
+                                join(JoinType.INNER,
                                         ImmutableList.of(equiJoinClause("custkey", "custkey_0")),
                                         tableScan("orders", ImmutableMap.of("totalprice", "totalprice", "orderkey", "orderkey", "custkey", "custkey")),
                                         tableScan("customer", ImmutableMap.of("custkey_0", "custkey")))))));

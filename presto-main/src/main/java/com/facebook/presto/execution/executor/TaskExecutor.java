@@ -174,11 +174,14 @@ public class TaskExecutor
     // shared between SplitRunners
     private final CounterStat globalCpuTimeMicros = new CounterStat();
     private final CounterStat globalScheduledTimeMicros = new CounterStat();
+    private final CounterStat splitSkippedDueToMemoryPressure = new CounterStat();
 
     private final TimeStat blockedQuantaWallTime = new TimeStat(MICROSECONDS);
     private final TimeStat unblockedQuantaWallTime = new TimeStat(MICROSECONDS);
 
     private volatile boolean closed;
+
+    private volatile boolean lowMemory;
 
     @Inject
     public TaskExecutor(TaskManagerConfig config, EmbedVersion embedVersion, MultilevelSplitQueue splitQueue)
@@ -483,6 +486,13 @@ public class TaskExecutor
 
     private synchronized void scheduleTaskIfNecessary(TaskHandle taskHandle)
     {
+        // Worker skip processing split if jvm heap usage crosses configured threshold
+        // Helps reduce memory pressure on the worker and avoid OOMs
+        if (isLowMemory()) {
+            log.debug("Skip task scheduling due to low memory");
+            splitSkippedDueToMemoryPressure.update(1);
+            return;
+        }
         // if task has less than the minimum guaranteed splits running,
         // immediately schedule a new split for this task.  This assures
         // that a task gets its fair amount of consideration (you have to
@@ -498,6 +508,14 @@ public class TaskExecutor
 
     private synchronized void addNewEntrants()
     {
+        // Worker skip processing split if jvm heap usage crosses configured threshold
+        // Helps reduce memory pressure on the worker and avoid OOMs
+        if (isLowMemory()) {
+            log.debug("Skip polling next split worker due to low memory");
+            splitSkippedDueToMemoryPressure.update(1);
+            return;
+        }
+
         // Ignore intermediate splits when checking minimumNumberOfDrivers.
         // Otherwise with (for example) minimumNumberOfDrivers = 100, 200 intermediate splits
         // and 100 leaf splits, depending on order of appearing splits, number of
@@ -641,6 +659,17 @@ public class TaskExecutor
                             }
                         }
                         splitFinished(split);
+                    }
+                    finally {
+                        // Clear the interrupted flag on the current thread, driver cancellation may have triggered an interrupt
+                        // without TaskExecutor being shut down
+                        if (Thread.interrupted()) {
+                            if (closed) {
+                                // reset interrupted flag if TaskExecutor was closed, since that interrupt may have been the
+                                // shutdown signal to this TaskRunner thread
+                                Thread.currentThread().interrupt();
+                            }
+                        }
                     }
                 }
             }
@@ -893,6 +922,13 @@ public class TaskExecutor
         return globalCpuTimeMicros;
     }
 
+    @Managed
+    @Nested
+    public CounterStat getSplitSkippedDueToMemoryPressure()
+    {
+        return splitSkippedDueToMemoryPressure;
+    }
+
     private synchronized int getRunningTasksForLevel(int level)
     {
         int count = 0;
@@ -1020,5 +1056,15 @@ public class TaskExecutor
     public ThreadPoolExecutorMBean getProcessorExecutor()
     {
         return executorMBean;
+    }
+
+    public void setLowMemory(boolean lowMemory)
+    {
+        this.lowMemory = lowMemory;
+    }
+
+    public boolean isLowMemory()
+    {
+        return this.lowMemory;
     }
 }

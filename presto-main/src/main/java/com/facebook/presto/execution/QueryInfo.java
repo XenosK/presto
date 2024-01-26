@@ -17,17 +17,21 @@ import com.facebook.presto.SessionRepresentation;
 import com.facebook.presto.common.ErrorCode;
 import com.facebook.presto.common.ErrorType;
 import com.facebook.presto.common.resourceGroups.QueryType;
+import com.facebook.presto.common.transaction.TransactionId;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.QueryId;
+import com.facebook.presto.spi.eventlistener.CTEInformation;
 import com.facebook.presto.spi.eventlistener.PlanOptimizerInformation;
 import com.facebook.presto.spi.function.SqlFunctionId;
 import com.facebook.presto.spi.function.SqlInvokedFunction;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.prestospark.PrestoSparkExecutionContext;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.sql.planner.CanonicalPlanWithInfo;
-import com.facebook.presto.transaction.TransactionId;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -92,8 +96,14 @@ public class QueryInfo
     private final Set<SqlFunctionId> removedSessionFunctions;
     private final StatsAndCosts planStatsAndCosts;
     private final List<PlanOptimizerInformation> optimizerInformation;
+    private final List<CTEInformation> cteInformationList;
+    private final Set<String> scalarFunctions;
+    private final Set<String> aggregateFunctions;
+    private final Set<String> windowsFunctions;
     // Using a list rather than map, to avoid implementing map key deserializer
     private final List<CanonicalPlanWithInfo> planCanonicalInfo;
+    private Map<PlanNodeId, PlanNode> planIdNodeMap;
+    private final Optional<PrestoSparkExecutionContext> prestoSparkExecutionContext;
 
     @JsonCreator
     public QueryInfo(
@@ -133,7 +143,13 @@ public class QueryInfo
             @JsonProperty("removedSessionFunctions") Set<SqlFunctionId> removedSessionFunctions,
             @JsonProperty("planStatsAndCosts") StatsAndCosts planStatsAndCosts,
             @JsonProperty("optimizerInformation") List<PlanOptimizerInformation> optimizerInformation,
-            List<CanonicalPlanWithInfo> planCanonicalInfo)
+            @JsonProperty("cteInformation") List<CTEInformation> cteInformationList,
+            @JsonProperty("scalarFunctions") Set<String> scalarFunctions,
+            @JsonProperty("aggregateFunctions") Set<String> aggregateFunctions,
+            @JsonProperty("windowsFunctions") Set<String> windowsFunctions,
+            List<CanonicalPlanWithInfo> planCanonicalInfo,
+            Map<PlanNodeId, PlanNode> planIdNodeMap,
+            @JsonProperty("prestoSparkExecutionContext") Optional<PrestoSparkExecutionContext> prestoSparkExecutionContext)
     {
         requireNonNull(queryId, "queryId is null");
         requireNonNull(session, "session is null");
@@ -163,6 +179,11 @@ public class QueryInfo
         requireNonNull(removedSessionFunctions, "removedSessionFunctions is null");
         requireNonNull(planStatsAndCosts, "planStatsAndCosts is null");
         requireNonNull(optimizerInformation, "optimizerInformation is null");
+        requireNonNull(cteInformationList, "cteInformationList is null");
+        requireNonNull(scalarFunctions, "scalarFunctions is null");
+        requireNonNull(aggregateFunctions, "aggregateFunctions is null");
+        requireNonNull(windowsFunctions, "windowsFunctions is null");
+        requireNonNull(prestoSparkExecutionContext, "prestoSparkExecutionContext is null");
 
         this.queryId = queryId;
         this.session = session;
@@ -205,7 +226,13 @@ public class QueryInfo
         this.removedSessionFunctions = ImmutableSet.copyOf(removedSessionFunctions);
         this.planStatsAndCosts = planStatsAndCosts;
         this.optimizerInformation = optimizerInformation;
+        this.cteInformationList = cteInformationList;
+        this.scalarFunctions = scalarFunctions;
+        this.aggregateFunctions = aggregateFunctions;
+        this.windowsFunctions = windowsFunctions;
         this.planCanonicalInfo = planCanonicalInfo == null ? ImmutableList.of() : planCanonicalInfo;
+        this.planIdNodeMap = planIdNodeMap == null ? ImmutableMap.of() : ImmutableMap.copyOf(planIdNodeMap);
+        this.prestoSparkExecutionContext = prestoSparkExecutionContext;
     }
 
     @JsonProperty
@@ -440,10 +467,45 @@ public class QueryInfo
         return optimizerInformation;
     }
 
+    @JsonProperty
+    public List<CTEInformation> getCteInformationList()
+    {
+        return cteInformationList;
+    }
+
+    @JsonProperty
+    public Set<String> getScalarFunctions()
+    {
+        return scalarFunctions;
+    }
+
+    @JsonProperty
+    public Set<String> getAggregateFunctions()
+    {
+        return aggregateFunctions;
+    }
+
+    @JsonProperty
+    public Set<String> getWindowsFunctions()
+    {
+        return windowsFunctions;
+    }
+
+    @JsonProperty
+    public Optional<PrestoSparkExecutionContext> getPrestoSparkExecutionContext()
+    {
+        return prestoSparkExecutionContext;
+    }
+
     // Don't serialize this field because it can be big
     public List<CanonicalPlanWithInfo> getPlanCanonicalInfo()
     {
         return planCanonicalInfo;
+    }
+
+    public Map<PlanNodeId, PlanNode> getPlanIdNodeMap()
+    {
+        return planIdNodeMap;
     }
 
     @Override

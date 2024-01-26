@@ -75,9 +75,11 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
@@ -98,17 +100,20 @@ import static com.facebook.presto.hive.HiveTestUtils.FUNCTION_AND_TYPE_MANAGER;
 import static com.facebook.presto.hive.HiveTestUtils.FUNCTION_RESOLUTION;
 import static com.facebook.presto.hive.HiveTestUtils.PAGE_SORTER;
 import static com.facebook.presto.hive.HiveTestUtils.ROW_EXPRESSION_SERVICE;
+import static com.facebook.presto.hive.HiveTestUtils.getAllSessionProperties;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveBatchPageSourceFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveFileWriterFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveRecordCursorProvider;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultHiveSelectivePageSourceFactories;
 import static com.facebook.presto.hive.HiveTestUtils.getDefaultOrcFileWriterFactory;
+import static com.facebook.presto.hive.HiveTestUtils.getDefaultS3HiveRecordCursorProvider;
 import static com.facebook.presto.hive.HiveTestUtils.getTypes;
 import static com.facebook.presto.hive.metastore.MetastoreOperationResult.EMPTY_RESULT;
 import static com.facebook.presto.hive.metastore.NoopMetastoreCacheStats.NOOP_METASTORE_CACHE_STATS;
 import static com.facebook.presto.spi.SplitContext.NON_CACHEABLE;
 import static com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.UNGROUPED_SCHEDULING;
 import static com.facebook.presto.testing.MaterializedResult.materializeSourceDataStream;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
@@ -230,7 +235,8 @@ public abstract class AbstractTestHiveFileSystem
                 config.getSplitLoaderConcurrency(),
                 config.getRecursiveDirWalkerEnabled(),
                 new ConfigBasedCacheQuotaRequirementProvider(cacheConfig),
-                new HiveEncryptionInformationProvider(ImmutableSet.of()));
+                new HiveEncryptionInformationProvider(ImmutableSet.of()),
+                new HivePartitionSkippabilityChecker());
         pageSinkProvider = new HivePageSinkProvider(
                 getDefaultHiveFileWriterFactories(config, metastoreClientConfig),
                 hdfsEnvironment,
@@ -249,12 +255,22 @@ public abstract class AbstractTestHiveFileSystem
                 new HiveWriterStats(),
                 getDefaultOrcFileWriterFactory(config, metastoreClientConfig),
                 columnConverterProvider);
-        pageSourceProvider = new HivePageSourceProvider(config, hdfsEnvironment, getDefaultHiveRecordCursorProvider(config, metastoreClientConfig), getDefaultHiveBatchPageSourceFactories(config, metastoreClientConfig), getDefaultHiveSelectivePageSourceFactories(config, metastoreClientConfig), FUNCTION_AND_TYPE_MANAGER, ROW_EXPRESSION_SERVICE);
+        Set<HiveRecordCursorProvider> recordCursorProviderSet = s3SelectPushdownEnabled ?
+                                                                    getDefaultS3HiveRecordCursorProvider(config, metastoreClientConfig) :
+                                                                    getDefaultHiveRecordCursorProvider(config, metastoreClientConfig);
+        pageSourceProvider = new HivePageSourceProvider(
+                config,
+                hdfsEnvironment,
+                recordCursorProviderSet,
+                getDefaultHiveBatchPageSourceFactories(config, metastoreClientConfig),
+                getDefaultHiveSelectivePageSourceFactories(config, metastoreClientConfig),
+                FUNCTION_AND_TYPE_MANAGER,
+                ROW_EXPRESSION_SERVICE);
     }
 
     protected ConnectorSession newSession()
     {
-        return new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig(), new CacheConfig()).getSessionProperties());
+        return new TestingConnectorSession(getAllSessionProperties(config, new HiveCommonClientConfig()));
     }
 
     protected Transaction newTransaction()
@@ -372,18 +388,18 @@ public abstract class AbstractTestHiveFileSystem
     public void testTableCreation()
             throws Exception
     {
-        for (HiveStorageFormat storageFormat : HiveStorageFormat.values()) {
-            if (storageFormat == HiveStorageFormat.CSV) {
-                // CSV supports only unbounded VARCHAR type
-                continue;
-            }
-            if (storageFormat == HiveStorageFormat.ALPHA) {
-                // Alpha read/write is not supported yet
-                continue;
-            }
+        for (HiveStorageFormat storageFormat : getSupportedHiveStorageFormats()) {
             createTable(METASTORE_CONTEXT, temporaryCreateTable, storageFormat);
             dropTable(temporaryCreateTable);
         }
+    }
+
+    protected List<HiveStorageFormat> getSupportedHiveStorageFormats()
+    {
+        // CSV supports only unbounded VARCHAR type, and Alpha does not support DML yet
+        return Arrays.stream(HiveStorageFormat.values())
+                .filter(format -> format != HiveStorageFormat.CSV && format != HiveStorageFormat.ALPHA)
+                .collect(toImmutableList());
     }
 
     private void createTable(MetastoreContext metastoreContext, SchemaTableName tableName, HiveStorageFormat storageFormat)
@@ -450,7 +466,13 @@ public abstract class AbstractTestHiveFileSystem
 
             TableHandle tableHandle = new TableHandle(new ConnectorId("hive"), hiveTableHandle, transaction.getTransactionHandle(), Optional.of(layoutHandle));
 
-            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, tableHandle.getLayout().get(), columnHandles, NON_CACHEABLE)) {
+            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(
+                    transaction.getTransactionHandle(),
+                    session,
+                    split,
+                    tableHandle.getLayout().get(),
+                    columnHandles,
+                    NON_CACHEABLE)) {
                 MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
                 assertEqualsIgnoreOrder(result.getMaterializedRows(), data.getMaterializedRows());
             }
@@ -465,7 +487,7 @@ public abstract class AbstractTestHiveFileSystem
         }
     }
 
-    private static class TestingHiveMetastore
+    public static class TestingHiveMetastore
             extends CachingHiveMetastore
     {
         private final Path basePath;
