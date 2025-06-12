@@ -37,6 +37,7 @@ import com.facebook.presto.execution.PartitionedSplitsInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.RemoteTask;
 import com.facebook.presto.execution.ScheduledSplit;
+import com.facebook.presto.execution.SchedulerStatsTracker;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskInfo;
@@ -57,6 +58,7 @@ import com.facebook.presto.server.SimpleHttpResponseCallback;
 import com.facebook.presto.server.SimpleHttpResponseHandler;
 import com.facebook.presto.server.TaskUpdateRequest;
 import com.facebook.presto.server.smile.BaseResponse;
+import com.facebook.presto.server.thrift.ThriftHttpResponseHandler;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SplitWeight;
 import com.facebook.presto.spi.plan.PlanNode;
@@ -73,12 +75,14 @@ import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
+import com.sun.management.ThreadMXBean;
 import io.airlift.units.Duration;
-import org.joda.time.DateTime;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import java.lang.management.ManagementFactory;
 import java.net.URI;
 import java.util.Collection;
 import java.util.HashMap;
@@ -115,6 +119,8 @@ import static com.facebook.presto.execution.TaskStatus.failWith;
 import static com.facebook.presto.server.RequestErrorTracker.isExpectedError;
 import static com.facebook.presto.server.RequestErrorTracker.taskRequestErrorTracker;
 import static com.facebook.presto.server.RequestHelpers.setContentTypeHeaders;
+import static com.facebook.presto.server.RequestHelpers.setTaskInfoAcceptTypeHeaders;
+import static com.facebook.presto.server.RequestHelpers.setTaskUpdateRequestContentTypeHeaders;
 import static com.facebook.presto.server.TaskResourceUtils.convertFromThriftTaskInfo;
 import static com.facebook.presto.server.smile.AdaptingJsonResponseHandler.createAdaptingJsonResponseHandler;
 import static com.facebook.presto.server.smile.FullSmileResponseHandler.createFullSmileResponseHandler;
@@ -133,6 +139,7 @@ import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.lang.Math.addExact;
 import static java.lang.String.format;
+import static java.lang.System.currentTimeMillis;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -143,6 +150,7 @@ public final class HttpRemoteTask
 {
     private static final Logger log = Logger.get(HttpRemoteTask.class);
     private static final double UPDATE_WITHOUT_PLAN_STATS_SAMPLE_RATE = 0.01;
+    private static final ThreadMXBean THREAD_MX_BEAN = (ThreadMXBean) ManagementFactory.getThreadMXBean();
 
     private final TaskId taskId;
     private final URI taskLocation;
@@ -163,9 +171,13 @@ public final class HttpRemoteTask
     private final ContinuousTaskStatusFetcher taskStatusFetcher;
 
     @GuardedBy("this")
+    private final LongArrayList taskUpdateTimeline = new LongArrayList();
+    @GuardedBy("this")
     private Future<?> currentRequest;
     @GuardedBy("this")
     private long currentRequestStartNanos;
+    @GuardedBy("this")
+    private long currentRequestLastTaskUpdate;
 
     @GuardedBy("this")
     private final SetMultimap<PlanNodeId, ScheduledSplit> pendingSplits = HashMultimap.create();
@@ -197,6 +209,7 @@ public final class HttpRemoteTask
     //Json codec required for TaskUpdateRequest endpoint which uses JSON and returns a TaskInfo
     private final Codec<TaskInfo> taskInfoJsonCodec;
     private final Codec<TaskUpdateRequest> taskUpdateRequestCodec;
+    private final Codec<TaskInfo> taskInfoResponseCodec;
     private final Codec<PlanFragment> planFragmentCodec;
 
     private final RequestErrorTracker updateErrorTracker;
@@ -212,15 +225,19 @@ public final class HttpRemoteTask
     private final boolean binaryTransportEnabled;
     private final boolean thriftTransportEnabled;
     private final boolean taskInfoThriftTransportEnabled;
+    private final boolean taskUpdateRequestThriftSerdeEnabled;
+    private final boolean taskInfoResponseThriftSerdeEnabled;
     private final Protocol thriftProtocol;
     private final ConnectorTypeSerdeManager connectorTypeSerdeManager;
     private final HandleResolver handleResolver;
-    private final int maxTaskUpdateSizeInBytes;
+    private final long maxTaskUpdateSizeInBytes;
     private final int maxUnacknowledgedSplits;
 
     private final TableWriteInfo tableWriteInfo;
 
     private final DecayCounter taskUpdateRequestSize;
+    private final boolean taskUpdateSizeTrackingEnabled;
+    private final SchedulerStatsTracker schedulerStatsTracker;
 
     public HttpRemoteTask(
             Session session,
@@ -244,6 +261,7 @@ public final class HttpRemoteTask
             Codec<TaskInfo> taskInfoCodec,
             Codec<TaskInfo> taskInfoJsonCodec,
             Codec<TaskUpdateRequest> taskUpdateRequestCodec,
+            Codec<TaskInfo> taskInfoResponseCodec,
             Codec<PlanFragment> planFragmentCodec,
             Codec<MetadataUpdates> metadataUpdatesCodec,
             NodeStatsTracker nodeStatsTracker,
@@ -251,14 +269,18 @@ public final class HttpRemoteTask
             boolean binaryTransportEnabled,
             boolean thriftTransportEnabled,
             boolean taskInfoThriftTransportEnabled,
+            boolean taskUpdateRequestThriftSerdeEnabled,
+            boolean taskInfoResponseThriftSerdeEnabled,
             Protocol thriftProtocol,
             TableWriteInfo tableWriteInfo,
-            int maxTaskUpdateSizeInBytes,
+            long maxTaskUpdateSizeInBytes,
             MetadataManager metadataManager,
             QueryManager queryManager,
             DecayCounter taskUpdateRequestSize,
+            boolean taskUpdateSizeTrackingEnabled,
             HandleResolver handleResolver,
-            ConnectorTypeSerdeManager connectorTypeSerdeManager)
+            ConnectorTypeSerdeManager connectorTypeSerdeManager,
+            SchedulerStatsTracker schedulerStatsTracker)
     {
         requireNonNull(session, "session is null");
         requireNonNull(taskId, "taskId is null");
@@ -284,6 +306,7 @@ public final class HttpRemoteTask
         requireNonNull(handleResolver, "handleResolver is null");
         requireNonNull(connectorTypeSerdeManager, "connectorTypeSerdeManager is null");
         requireNonNull(taskUpdateRequestSize, "taskUpdateRequestSize cannot be null");
+        requireNonNull(schedulerStatsTracker, "schedulerStatsTracker is null");
 
         try (SetThreadName ignored = new SetThreadName("HttpRemoteTask-%s", taskId)) {
             this.taskId = taskId;
@@ -300,6 +323,7 @@ public final class HttpRemoteTask
             this.taskInfoCodec = taskInfoCodec;
             this.taskInfoJsonCodec = taskInfoJsonCodec;
             this.taskUpdateRequestCodec = taskUpdateRequestCodec;
+            this.taskInfoResponseCodec = taskInfoResponseCodec;
             this.planFragmentCodec = planFragmentCodec;
             this.updateErrorTracker = taskRequestErrorTracker(taskId, location, maxErrorDuration, errorScheduledExecutor, "updating task");
             this.nodeStatsTracker = requireNonNull(nodeStatsTracker, "nodeStatsTracker is null");
@@ -308,6 +332,8 @@ public final class HttpRemoteTask
             this.binaryTransportEnabled = binaryTransportEnabled;
             this.thriftTransportEnabled = thriftTransportEnabled;
             this.taskInfoThriftTransportEnabled = taskInfoThriftTransportEnabled;
+            this.taskUpdateRequestThriftSerdeEnabled = taskUpdateRequestThriftSerdeEnabled;
+            this.taskInfoResponseThriftSerdeEnabled = taskInfoResponseThriftSerdeEnabled;
             this.thriftProtocol = thriftProtocol;
             this.connectorTypeSerdeManager = connectorTypeSerdeManager;
             this.handleResolver = handleResolver;
@@ -321,6 +347,8 @@ public final class HttpRemoteTask
                     .map(PlanNode::getId)
                     .collect(toImmutableSet());
             this.taskUpdateRequestSize = taskUpdateRequestSize;
+            this.taskUpdateSizeTrackingEnabled = taskUpdateSizeTrackingEnabled;
+            this.schedulerStatsTracker = schedulerStatsTracker;
 
             for (Entry<PlanNodeId, Split> entry : requireNonNull(initialSplits, "initialSplits is null").entries()) {
                 ScheduledSplit scheduledSplit = new ScheduledSplit(nextSplitId.getAndIncrement(), entry.getKey(), entry.getValue());
@@ -343,7 +371,7 @@ public final class HttpRemoteTask
                     .map(outputId -> new BufferInfo(outputId, false, 0, 0, PageBufferInfo.empty()))
                     .collect(toImmutableList());
 
-            TaskInfo initialTask = createInitialTask(taskId, location, bufferStates, new TaskStats(DateTime.now(), null), nodeId);
+            TaskInfo initialTask = createInitialTask(taskId, location, bufferStates, new TaskStats(currentTimeMillis(), 0), nodeId);
 
             this.taskStatusFetcher = new ContinuousTaskStatusFetcher(
                     this::failTask,
@@ -397,6 +425,12 @@ public final class HttpRemoteTask
             updateTaskStats();
             updateSplitQueueSpace();
         }
+    }
+
+    @Override
+    public PlanFragment getPlanFragment()
+    {
+        return planFragment;
     }
 
     @Override
@@ -815,8 +849,9 @@ public final class HttpRemoteTask
         }
     }
 
-    private void scheduleUpdate()
+    private synchronized void scheduleUpdate()
     {
+        taskUpdateTimeline.add(System.nanoTime());
         executor.execute(this::sendUpdate);
     }
 
@@ -842,7 +877,12 @@ public final class HttpRemoteTask
 
         List<TaskSource> sources = getSources();
 
-        Optional<byte[]> fragment = sendPlan.get() ? Optional.of(planFragment.toBytes(planFragmentCodec)) : Optional.empty();
+        Optional<byte[]> fragment = Optional.empty();
+        if (sendPlan.get()) {
+            long start = THREAD_MX_BEAN.getCurrentThreadCpuTime();
+            fragment = Optional.of(planFragment.bytesForTaskSerialization(planFragmentCodec));
+            schedulerStatsTracker.recordTaskPlanSerializedCpuTime(THREAD_MX_BEAN.getCurrentThreadCpuTime() - start);
+        }
         Optional<TableWriteInfo> writeInfo = sendPlan.get() ? Optional.of(tableWriteInfo) : Optional.empty();
         TaskUpdateRequest updateRequest = new TaskUpdateRequest(
                 session.toSessionRepresentation(),
@@ -851,51 +891,79 @@ public final class HttpRemoteTask
                 sources,
                 outputBuffers.get(),
                 writeInfo);
-        byte[] taskUpdateRequestJson = taskUpdateRequestCodec.toBytes(updateRequest);
-        taskUpdateRequestSize.add(taskUpdateRequestJson.length);
+        long serializeStartCpuTimeNanos = THREAD_MX_BEAN.getCurrentThreadCpuTime();
 
-        if (taskUpdateRequestJson.length > maxTaskUpdateSizeInBytes) {
-            failTask(new PrestoException(EXCEEDED_TASK_UPDATE_SIZE_LIMIT, format("TaskUpdate size of %d Bytes has exceeded the limit of %d Bytes", taskUpdateRequestJson.length, maxTaskUpdateSizeInBytes)));
+        Request.Builder requestBuilder;
+        HttpUriBuilder uriBuilder = getHttpUriBuilder(taskStatus);
+
+        byte[] taskUpdateRequestBytes = taskUpdateRequestCodec.toBytes(updateRequest);
+        schedulerStatsTracker.recordTaskUpdateSerializedCpuTime(THREAD_MX_BEAN.getCurrentThreadCpuTime() - serializeStartCpuTimeNanos);
+
+        if (taskUpdateRequestBytes.length > maxTaskUpdateSizeInBytes) {
+            failTask(new PrestoException(EXCEEDED_TASK_UPDATE_SIZE_LIMIT, getExceededTaskUpdateSizeMessage(taskUpdateRequestBytes)));
         }
 
-        if (fragment.isPresent()) {
-            stats.updateWithPlanSize(taskUpdateRequestJson.length);
-        }
-        else {
-            if (ThreadLocalRandom.current().nextDouble() < UPDATE_WITHOUT_PLAN_STATS_SAMPLE_RATE) {
-                // This is to keep track of the task update size even when the plan fragment is NOT present
-                stats.updateWithoutPlanSize(taskUpdateRequestJson.length);
+        if (taskUpdateSizeTrackingEnabled) {
+            taskUpdateRequestSize.add(taskUpdateRequestBytes.length);
+
+            if (fragment.isPresent()) {
+                stats.updateWithPlanSize(taskUpdateRequestBytes.length);
+            }
+            else {
+                if (ThreadLocalRandom.current().nextDouble() < UPDATE_WITHOUT_PLAN_STATS_SAMPLE_RATE) {
+                    // This is to keep track of the task update size even when the plan fragment is NOT present
+                    stats.updateWithoutPlanSize(taskUpdateRequestBytes.length);
+                }
             }
         }
-
-        HttpUriBuilder uriBuilder = getHttpUriBuilder(taskStatus);
-        Request request = setContentTypeHeaders(binaryTransportEnabled, preparePost())
+        requestBuilder = setTaskUpdateRequestContentTypeHeaders(taskUpdateRequestThriftSerdeEnabled, binaryTransportEnabled, preparePost());
+        requestBuilder = setTaskInfoAcceptTypeHeaders(taskInfoResponseThriftSerdeEnabled, binaryTransportEnabled, requestBuilder);
+        Request request = requestBuilder
                 .setUri(uriBuilder.build())
-                .setBodyGenerator(createStaticBodyGenerator(taskUpdateRequestJson))
+                .setBodyGenerator(createStaticBodyGenerator(taskUpdateRequestBytes))
                 .build();
 
         ResponseHandler responseHandler;
-        if (binaryTransportEnabled) {
-            responseHandler = createFullSmileResponseHandler((SmileCodec<TaskInfo>) taskInfoCodec);
+        if (taskInfoResponseThriftSerdeEnabled) {
+            responseHandler = new ThriftResponseHandler(unwrapThriftCodec(taskInfoResponseCodec));
+        }
+        else if (binaryTransportEnabled) {
+            responseHandler = createFullSmileResponseHandler((SmileCodec<TaskInfo>) taskInfoResponseCodec);
         }
         else {
-            responseHandler = createAdaptingJsonResponseHandler((JsonCodec<TaskInfo>) taskInfoJsonCodec);
+            responseHandler = createAdaptingJsonResponseHandler((JsonCodec<TaskInfo>) taskInfoResponseCodec);
         }
 
         updateErrorTracker.startRequest();
 
-        ListenableFuture<BaseResponse<TaskInfo>> future = httpClient.executeAsync(request, responseHandler);
+        ListenableFuture<?> future = httpClient.executeAsync(request, responseHandler);
         currentRequest = future;
         currentRequestStartNanos = System.nanoTime();
+        if (!taskUpdateTimeline.isEmpty()) {
+            currentRequestLastTaskUpdate = taskUpdateTimeline.getLong(taskUpdateTimeline.size() - 1);
+        }
 
         // The needsUpdate flag needs to be set to false BEFORE adding the Future callback since callback might change the flag value
         // and does so without grabbing the instance lock.
         needsUpdate.set(false);
 
-        Futures.addCallback(
-                future,
-                new SimpleHttpResponseHandler<>(new UpdateResponseHandler(sources), request.getUri(), stats.getHttpResponseStats(), REMOTE_TASK_ERROR),
-                executor);
+        if (taskInfoResponseThriftSerdeEnabled) {
+            Futures.addCallback(
+                    (ListenableFuture<ThriftResponse<TaskInfo>>) future,
+                    new ThriftHttpResponseHandler<>(new UpdateResponseHandler(sources), request.getUri(), stats.getHttpResponseStats(), REMOTE_TASK_ERROR),
+                    executor);
+        }
+        else {
+            Futures.addCallback(
+                    (ListenableFuture<BaseResponse<TaskInfo>>) future,
+                    new SimpleHttpResponseHandler<>(new UpdateResponseHandler(sources), request.getUri(), stats.getHttpResponseStats(), REMOTE_TASK_ERROR),
+                    executor);
+        }
+    }
+
+    private String getExceededTaskUpdateSizeMessage(byte[] taskUpdateRequestJson)
+    {
+        return format("TaskUpdate size of %s bytes has exceeded the limit of %s bytes", taskUpdateRequestJson.length, this.maxTaskUpdateSizeInBytes);
     }
 
     private synchronized List<TaskSource> getSources()
@@ -1104,15 +1172,27 @@ public final class HttpRemoteTask
         {
             try (SetThreadName ignored = new SetThreadName("UpdateResponseHandler-%s", taskId)) {
                 try {
+                    long oldestTaskUpdateTime = 0;
                     long currentRequestStartNanos;
                     synchronized (HttpRemoteTask.this) {
                         currentRequest = null;
                         sendPlan.set(value.isNeedsPlan());
                         currentRequestStartNanos = HttpRemoteTask.this.currentRequestStartNanos;
+                        if (!taskUpdateTimeline.isEmpty()) {
+                            oldestTaskUpdateTime = taskUpdateTimeline.getLong(0);
+                        }
+                        int deliveredUpdates = taskUpdateTimeline.size();
+                        while (deliveredUpdates > 0 && taskUpdateTimeline.getLong(deliveredUpdates - 1) > currentRequestLastTaskUpdate) {
+                            deliveredUpdates--;
+                        }
+                        taskUpdateTimeline.removeElements(0, deliveredUpdates);
                     }
                     updateStats(currentRequestStartNanos);
                     processTaskUpdate(value, sources);
                     updateErrorTracker.requestSucceeded();
+                    if (oldestTaskUpdateTime != 0) {
+                        schedulerStatsTracker.recordTaskUpdateDeliveredTime(System.nanoTime() - oldestTaskUpdateTime);
+                    }
                 }
                 finally {
                     sendUpdate();

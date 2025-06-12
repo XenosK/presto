@@ -104,9 +104,7 @@ class AnnouncerTestSuite : public ::testing::TestWithParam<bool> {
 
     std::string keyPath = getCertsPath("client_ca.pem");
     std::string ciphers = "ECDHE-ECDSA-AES256-GCM-SHA384,AES256-GCM-SHA384";
-    sslContext_ = std::make_shared<folly::SSLContext>();
-    sslContext_->loadCertKeyPairFromFiles(keyPath.c_str(), keyPath.c_str());
-    sslContext_->setCiphersOrThrow(ciphers);
+    sslContext_ = util::createSSLContext(keyPath, ciphers);
   }
 
  protected:
@@ -175,6 +173,8 @@ TEST_P(AnnouncerTestSuite, basic) {
       "testing",
       "test-node",
       "test-node-location",
+      "DEFAULT",
+      true,
       {"hive", "tpch"},
       500 /*milliseconds*/,
       useHttps ? sslContext_ : nullptr);

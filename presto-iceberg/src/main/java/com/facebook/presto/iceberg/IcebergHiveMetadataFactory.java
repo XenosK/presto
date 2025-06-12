@@ -18,6 +18,7 @@ import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.NodeVersion;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
+import com.facebook.presto.iceberg.statistics.StatisticsFileCache;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
 import com.facebook.presto.spi.plan.FilterStatsCalculatorService;
@@ -30,6 +31,7 @@ import static java.util.Objects.requireNonNull;
 public class IcebergHiveMetadataFactory
         implements IcebergMetadataFactory
 {
+    final IcebergCatalogName catalogName;
     final ExtendedHiveMetastore metastore;
     final HdfsEnvironment hdfsEnvironment;
     final TypeManager typeManager;
@@ -38,10 +40,14 @@ public class IcebergHiveMetadataFactory
     final RowExpressionService rowExpressionService;
     final NodeVersion nodeVersion;
     final FilterStatsCalculatorService filterStatsCalculatorService;
+    final IcebergHiveTableOperationsConfig operationsConfig;
+    final StatisticsFileCache statisticsFileCache;
+    final ManifestFileCache manifestFileCache;
+    final IcebergTableProperties tableProperties;
 
     @Inject
     public IcebergHiveMetadataFactory(
-            IcebergConfig config,
+            IcebergCatalogName catalogName,
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
@@ -49,8 +55,13 @@ public class IcebergHiveMetadataFactory
             RowExpressionService rowExpressionService,
             JsonCodec<CommitTaskData> commitTaskCodec,
             NodeVersion nodeVersion,
-            FilterStatsCalculatorService filterStatsCalculatorService)
+            FilterStatsCalculatorService filterStatsCalculatorService,
+            IcebergHiveTableOperationsConfig operationsConfig,
+            StatisticsFileCache statisticsFileCache,
+            ManifestFileCache manifestFileCache,
+            IcebergTableProperties tableProperties)
     {
+        this.catalogName = requireNonNull(catalogName, "catalogName is null");
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
@@ -59,11 +70,27 @@ public class IcebergHiveMetadataFactory
         this.commitTaskCodec = requireNonNull(commitTaskCodec, "commitTaskCodec is null");
         this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
         this.filterStatsCalculatorService = requireNonNull(filterStatsCalculatorService, "filterStatsCalculatorService is null");
-        requireNonNull(config, "config is null");
+        this.operationsConfig = requireNonNull(operationsConfig, "operationsConfig is null");
+        this.statisticsFileCache = requireNonNull(statisticsFileCache, "statisticsFileCache is null");
+        this.manifestFileCache = requireNonNull(manifestFileCache, "manifestFileCache is null");
+        this.tableProperties = requireNonNull(tableProperties, "icebergTableProperties is null");
     }
 
     public ConnectorMetadata create()
     {
-        return new IcebergHiveMetadata(metastore, hdfsEnvironment, typeManager, functionResolution, rowExpressionService, commitTaskCodec, nodeVersion, filterStatsCalculatorService);
+        return new IcebergHiveMetadata(
+                catalogName,
+                metastore,
+                hdfsEnvironment,
+                typeManager,
+                functionResolution,
+                rowExpressionService,
+                commitTaskCodec,
+                nodeVersion,
+                filterStatsCalculatorService,
+                operationsConfig,
+                statisticsFileCache,
+                manifestFileCache,
+                tableProperties);
     }
 }

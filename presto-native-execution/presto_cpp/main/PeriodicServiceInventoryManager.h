@@ -33,6 +33,12 @@ class PeriodicServiceInventoryManager {
 
   void stop();
 
+  /// Set extra text to log during 'request succeeded' events.
+  void setDetails(const std::string& details);
+
+  /// If disabled then won't send any requests, but keeps itself running.
+  void enableRequest(bool enable);
+
  protected:
   // Denotes whether we retry failed requests due to network errors.
   virtual bool retryFailed() {
@@ -59,16 +65,17 @@ class PeriodicServiceInventoryManager {
   const std::shared_ptr<CoordinatorDiscoverer> coordinatorDiscoverer_;
   const folly::SSLContextPtr sslContext_;
   const std::string id_;
+  folly::Synchronized<std::string> details_;
   const uint64_t frequencyMs_;
   const std::shared_ptr<velox::memory::MemoryPool> pool_;
   /// jitter value for backoff delay time in case of failure
   const double backOffjitterParam_{0.1};
 
   folly::EventBaseThread eventBaseThread_;
-  std::unique_ptr<proxygen::SessionPool> sessionPool_;
   folly::SocketAddress serviceAddress_;
   std::shared_ptr<http::HttpClient> client_;
   std::atomic_bool stopped_{true};
+  std::atomic_bool requestEnabled_{true};
   uint64_t failedAttempts_{0};
   uint64_t attempts_{0};
 

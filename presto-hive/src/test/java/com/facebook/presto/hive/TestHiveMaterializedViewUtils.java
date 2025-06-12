@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.common.RuntimeStats;
 import com.facebook.presto.common.block.TestingBlockEncodingSerde;
 import com.facebook.presto.common.predicate.NullableValue;
 import com.facebook.presto.common.predicate.TupleDomain;
@@ -34,6 +35,7 @@ import com.google.common.collect.ImmutableMap;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
 
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +65,7 @@ public class TestHiveMaterializedViewUtils
     private static final String SQL = "sql";
 
     private final LiteralEncoder literalEncoder = new LiteralEncoder(new TestingBlockEncodingSerde());
-    private final MetastoreContext metastoreContext = new MetastoreContext(USER_NAME, QUERY_ID, Optional.empty(), Optional.empty(), Optional.empty(), false, HiveColumnConverterProvider.DEFAULT_COLUMN_CONVERTER_PROVIDER, WarningCollector.NOOP);
+    private final MetastoreContext metastoreContext = new MetastoreContext(USER_NAME, QUERY_ID, Optional.empty(), Collections.emptySet(), Optional.empty(), Optional.empty(), false, HiveColumnConverterProvider.DEFAULT_COLUMN_CONVERTER_PROVIDER, WarningCollector.NOOP, new RuntimeStats());
 
     @Test
     public void testMaterializedDataPredicates()
@@ -621,6 +623,7 @@ public class TestHiveMaterializedViewUtils
     private static Table getTable(String tableName, List<Column> partitionColumns)
     {
         return new Table(
+                Optional.of("catalogName"),
                 SCHEMA_NAME,
                 tableName,
                 USER_NAME,

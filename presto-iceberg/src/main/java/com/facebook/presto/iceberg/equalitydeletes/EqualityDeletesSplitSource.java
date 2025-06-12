@@ -15,6 +15,7 @@ package com.facebook.presto.iceberg.equalitydeletes;
 
 import com.facebook.presto.iceberg.IcebergSplit;
 import com.facebook.presto.iceberg.IcebergUtil;
+import com.facebook.presto.iceberg.PartitionData;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorSplitSource;
@@ -23,8 +24,8 @@ import com.facebook.presto.spi.SplitWeight;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
 import com.google.common.collect.ImmutableList;
 import org.apache.iceberg.DeleteFile;
-import org.apache.iceberg.FileContent;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.PartitionSpecParser;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.CloseableIterator;
@@ -35,9 +36,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static com.facebook.presto.hive.HiveCommonSessionProperties.getAffinitySchedulingFileSectionSize;
 import static com.facebook.presto.hive.HiveCommonSessionProperties.getNodeSelectionStrategy;
+import static com.facebook.presto.iceberg.FileContent.EQUALITY_DELETES;
+import static com.facebook.presto.iceberg.FileContent.fromIcebergFileContent;
+import static com.facebook.presto.iceberg.FileFormat.fromIcebergFileFormat;
 import static com.facebook.presto.iceberg.IcebergErrorCode.ICEBERG_FILESYSTEM_ERROR;
 import static com.facebook.presto.iceberg.IcebergUtil.getPartitionKeys;
+import static com.facebook.presto.iceberg.IcebergUtil.partitionDataFromStructLike;
 import static com.google.common.collect.Iterators.limit;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -47,6 +53,7 @@ public class EqualityDeletesSplitSource
 {
     private final ConnectorSession session;
     private final Map<Integer, PartitionSpec> specById;
+    private final long affinitySchedulingSectionSize;
     private CloseableIterator<DeleteFile> deleteFiles;
 
     public EqualityDeletesSplitSource(
@@ -58,7 +65,8 @@ public class EqualityDeletesSplitSource
         requireNonNull(table, "table is null");
         requireNonNull(deleteFiles, "deleteFiles is null");
         this.specById = table.specs();
-        this.deleteFiles = CloseableIterable.filter(deleteFiles, deleteFile -> deleteFile.content() == FileContent.EQUALITY_DELETES).iterator();
+        this.deleteFiles = CloseableIterable.filter(deleteFiles, deleteFile -> fromIcebergFileContent(deleteFile.content()) == EQUALITY_DELETES).iterator();
+        this.affinitySchedulingSectionSize = getAffinitySchedulingFileSectionSize(session).toBytes();
     }
 
     @Override
@@ -100,17 +108,23 @@ public class EqualityDeletesSplitSource
 
     private IcebergSplit splitFromDeleteFile(DeleteFile deleteFile)
     {
+        PartitionSpec spec = specById.get(deleteFile.specId());
+        Optional<PartitionData> partitionData = partitionDataFromStructLike(spec, deleteFile.partition());
+
         return new IcebergSplit(
                 deleteFile.path().toString(),
                 0,
                 deleteFile.fileSizeInBytes(),
-                deleteFile.format(),
+                fromIcebergFileFormat(deleteFile.format()),
                 ImmutableList.of(),
                 getPartitionKeys(specById.get(deleteFile.specId()), deleteFile.partition()),
+                PartitionSpecParser.toJson(spec),
+                partitionData.map(PartitionData::toJson),
                 getNodeSelectionStrategy(session),
                 SplitWeight.standard(),
                 ImmutableList.of(),
                 Optional.empty(),
-                IcebergUtil.getDataSequenceNumber(deleteFile));
+                IcebergUtil.getDataSequenceNumber(deleteFile),
+                affinitySchedulingSectionSize);
     }
 }

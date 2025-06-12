@@ -33,6 +33,7 @@ public class NativeExecutionSystemConfig
     // Port on which presto-native http server should run
     private static final String HTTP_SERVER_HTTP_PORT = "http-server.http.port";
     private static final String HTTP_SERVER_REUSE_PORT = "http-server.reuse-port";
+    private static final String HTTP_SERVER_BIND_TO_NODE_INTERNAL_ADDRESS_ONLY_ENABLED = "http-server.bind-to-node-internal-address-only-enabled";
     private static final String REGISTER_TEST_FUNCTIONS = "register-test-functions";
     // Number of I/O thread to use for serving http request on presto-native (proxygen server)
     // this excludes worker thread used by velox
@@ -78,11 +79,18 @@ public class NativeExecutionSystemConfig
     // Set memory arbitrator capacity to the same as per-query memory capacity
     // as there is only one query running at Presto-on-Spark at a time.
     private static final String MEMORY_ARBITRATOR_CAPACITY_GB = "query-memory-gb";
+    // Set memory arbitrator reserved capacity. Since there is only one query
+    // running at Presto-on-Spark at a time, then we shall set this to zero.
+    private static final String MEMORY_ARBITRATOR_RESERVED_CAPACITY_GB = "query-reserved-memory-gb";
     // Set the initial memory capacity when we create a query memory pool. For
     // Presto-on-Spark, we set it to 'query-memory-gb' to allocate all the
     // memory arbitrator capacity to the query memory pool on its creation as
     // there is only one query running at a time.
     private static final String MEMORY_POOL_INIT_CAPACITY = "memory-pool-init-capacity";
+    // Set the reserved memory capacity when we create a query memory pool. For
+    // Presto-on-Spark, we set this to zero as there is only one query running
+    // at a time.
+    private static final String MEMORY_POOL_RESERVED_CAPACITY = "memory-pool-reserved-capacity";
     // Set the minimal memory capacity transfer between memory pools under
     // memory arbitration. For Presto-on-Spark, there is only one query running
     // so this specified how much memory to reclaim from a query when it runs
@@ -107,6 +115,7 @@ public class NativeExecutionSystemConfig
     private boolean enableVeloxExpressionLogging;
     private boolean enableVeloxTaskLogging = true;
     private boolean httpServerReusePort = true;
+    private boolean httpServerBindToNodeInternalAddressOnlyEnabled = true;
     private int httpServerPort = 7777;
     private double httpServerNumIoThreadsHwMultiplier = 1.0;
     private int httpsServerPort = 7778;
@@ -123,12 +132,15 @@ public class NativeExecutionSystemConfig
     // Reserve 2GB from system memory for system operations such as disk
     // spilling and cache prefetch.
     private DataSize queryMemoryGb = new DataSize(8, DataSize.Unit.GIGABYTE);
+
+    private DataSize queryReservedMemoryGb = new DataSize(0, DataSize.Unit.GIGABYTE);
     private boolean useMmapAllocator = true;
     private String memoryArbitratorKind = "SHARED";
     private int memoryArbitratorCapacityGb = 8;
+    private int memoryArbitratorReservedCapacityGb;
     private long memoryPoolInitCapacity = 8L << 30;
+    private long memoryPoolReservedCapacity;
     private long memoryPoolTransferCapacity = 2L << 30;
-
     private long memoryReclaimWaitMs = 300_000;
     private String spillerSpillPath = "";
     private int concurrentLifespansPerTask = 5;
@@ -149,6 +161,7 @@ public class NativeExecutionSystemConfig
                 .put(ENABLE_VELOX_TASK_LOGGING, String.valueOf(isEnableVeloxTaskLogging()))
                 .put(HTTP_SERVER_HTTP_PORT, String.valueOf(getHttpServerPort()))
                 .put(HTTP_SERVER_REUSE_PORT, String.valueOf(isHttpServerReusePort()))
+                .put(HTTP_SERVER_BIND_TO_NODE_INTERNAL_ADDRESS_ONLY_ENABLED, String.valueOf(isHttpServerBindToNodeInternalAddressOnlyEnabled()))
                 .put(REGISTER_TEST_FUNCTIONS, String.valueOf(isRegisterTestFunctions()))
                 .put(HTTP_SERVER_HTTPS_PORT, String.valueOf(getHttpsServerPort()))
                 .put(HTTP_SERVER_HTTPS_ENABLED, String.valueOf(isEnableHttpsCommunication()))
@@ -167,7 +180,9 @@ public class NativeExecutionSystemConfig
                 .put(USE_MMAP_ALLOCATOR, String.valueOf(getUseMmapAllocator()))
                 .put(MEMORY_ARBITRATOR_KIND, String.valueOf(getMemoryArbitratorKind()))
                 .put(MEMORY_ARBITRATOR_CAPACITY_GB, String.valueOf(getMemoryArbitratorCapacityGb()))
+                .put(MEMORY_ARBITRATOR_RESERVED_CAPACITY_GB, String.valueOf(getMemoryArbitratorReservedCapacityGb()))
                 .put(MEMORY_POOL_INIT_CAPACITY, String.valueOf(getMemoryPoolInitCapacity()))
+                .put(MEMORY_POOL_RESERVED_CAPACITY, String.valueOf(getMemoryPoolReservedCapacity()))
                 .put(MEMORY_POOL_TRANSFER_CAPACITY, String.valueOf(getMemoryPoolTransferCapacity()))
                 .put(MEMORY_RECLAIM_WAIT_MS, String.valueOf(getMemoryReclaimWaitMs()))
                 .put(SPILLER_SPILL_PATH, String.valueOf(getSpillerSpillPath()))
@@ -249,6 +264,18 @@ public class NativeExecutionSystemConfig
     public boolean isHttpServerReusePort()
     {
         return httpServerReusePort;
+    }
+
+    public boolean isHttpServerBindToNodeInternalAddressOnlyEnabled()
+    {
+        return httpServerBindToNodeInternalAddressOnlyEnabled;
+    }
+
+    @Config(HTTP_SERVER_BIND_TO_NODE_INTERNAL_ADDRESS_ONLY_ENABLED)
+    public NativeExecutionSystemConfig setHttpServerBindToNodeInternalAddressOnlyEnabled(boolean httpServerBindToNodeInternalAddressOnlyEnabled)
+    {
+        this.httpServerBindToNodeInternalAddressOnlyEnabled = httpServerBindToNodeInternalAddressOnlyEnabled;
+        return this;
     }
 
     @Config(REGISTER_TEST_FUNCTIONS)
@@ -455,6 +482,18 @@ public class NativeExecutionSystemConfig
         return memoryArbitratorCapacityGb;
     }
 
+    @Config(MEMORY_ARBITRATOR_RESERVED_CAPACITY_GB)
+    public NativeExecutionSystemConfig setMemoryArbitratorReservedCapacityGb(int memoryArbitratorReservedCapacityGb)
+    {
+        this.memoryArbitratorReservedCapacityGb = memoryArbitratorReservedCapacityGb;
+        return this;
+    }
+
+    public int getMemoryArbitratorReservedCapacityGb()
+    {
+        return memoryArbitratorReservedCapacityGb;
+    }
+
     @Config(MEMORY_POOL_INIT_CAPACITY)
     public NativeExecutionSystemConfig setMemoryPoolInitCapacity(long memoryPoolInitCapacity)
     {
@@ -465,6 +504,18 @@ public class NativeExecutionSystemConfig
     public long getMemoryPoolInitCapacity()
     {
         return memoryPoolInitCapacity;
+    }
+
+    @Config(MEMORY_POOL_RESERVED_CAPACITY)
+    public NativeExecutionSystemConfig setMemoryPoolReservedCapacity(long memoryPoolReservedCapacity)
+    {
+        this.memoryPoolReservedCapacity = memoryPoolReservedCapacity;
+        return this;
+    }
+
+    public long getMemoryPoolReservedCapacity()
+    {
+        return memoryPoolReservedCapacity;
     }
 
     @Config(MEMORY_POOL_TRANSFER_CAPACITY)

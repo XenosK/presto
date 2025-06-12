@@ -107,6 +107,13 @@ public class TestMySqlIntegrationSmokeTest
     }
 
     @Test
+    public void testIgnoredSchemas()
+    {
+        MaterializedResult actual = computeActual("SHOW SCHEMAS");
+        assertFalse(actual.getMaterializedRows().stream().anyMatch(schemaResult -> schemaResult.getField(0).equals("mysql")));
+    }
+
+    @Test
     public void testViews()
             throws SQLException
     {
@@ -169,6 +176,49 @@ public class TestMySqlIntegrationSmokeTest
     }
 
     @Test
+    public void testMysqlTimestamp()
+    {
+        // Do not support timestamp with time zone in mysql connector
+        assertQueryFails("CREATE TABLE test_timestamp (x timestamp with time zone)", "Unsupported column type: timestamp with time zone");
+
+        assertUpdate("CREATE TABLE test_timestamp (x timestamp)");
+        assertUpdate("INSERT INTO test_timestamp VALUES (timestamp '1970-01-01 00:00:00')", 1);
+        assertUpdate("INSERT INTO test_timestamp VALUES (timestamp '2017-05-01 10:12:34')", 1);
+        assertUpdate("INSERT INTO test_timestamp VALUES (timestamp '2018-06-02 11:13:45.123')", 1);
+        assertQuery("SELECT * FROM test_timestamp", "VALUES CAST('1970-01-01 00:00:00' AS TIMESTAMP)," +
+                " CAST('2017-05-01 10:12:34' AS TIMESTAMP)," +
+                " CAST('2018-06-02 11:13:45.123' AS TIMESTAMP)");
+
+        assertUpdate("CREATE TABLE test_timestamp2 (x timestamp)");
+        assertUpdate("INSERT INTO test_timestamp2 SELECT * from test_timestamp", 3);
+        assertQuery("SELECT * FROM test_timestamp2", "VALUES CAST('1970-01-01 00:00:00' AS TIMESTAMP)," +
+                " CAST('2017-05-01 10:12:34' AS TIMESTAMP)," +
+                " CAST('2018-06-02 11:13:45.123' AS TIMESTAMP)");
+        assertUpdate("DROP TABLE test_timestamp");
+        assertUpdate("DROP TABLE test_timestamp2");
+    }
+
+    @Test
+    public void testMysqlGeometry()
+            throws SQLException
+    {
+        execute("CREATE TABLE tpch.test_geometry (g GEOMETRY)");
+
+        execute("INSERT INTO tpch.test_geometry VALUES (ST_GeomFromText('POINT(1 2)'))");
+        execute("INSERT INTO tpch.test_geometry VALUES (ST_GeomFromText('LINESTRING(0 0, 5 5, 10 10)'))");
+        execute("INSERT INTO tpch.test_geometry VALUES (ST_GeomFromText('POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'))");
+
+        assertQuery(
+                "SELECT CAST(g AS VARCHAR) FROM test_geometry",
+                "VALUES " +
+                        "CAST('POINT (1 2)' AS VARCHAR), " +
+                        "CAST('LINESTRING (0 0, 5 5, 10 10)' AS VARCHAR), " +
+                        "CAST('POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))' AS VARCHAR)");
+
+        assertUpdate("DROP TABLE tpch.test_geometry");
+    }
+
+    @Test
     public void testCharTrailingSpace()
             throws Exception
     {
@@ -184,7 +234,7 @@ public class TestMySqlIntegrationSmokeTest
         Map<String, String> properties = ImmutableMap.of("deprecated.legacy-char-to-varchar-coercion", "true");
         Map<String, String> connectorProperties = ImmutableMap.of("connection-url", mysqlServer.getJdbcUrl());
 
-        try (QueryRunner queryRunner = new DistributedQueryRunner(getSession(), 3, properties);) {
+        try (QueryRunner queryRunner = new DistributedQueryRunner(getSession(), 3, properties)) {
             queryRunner.installPlugin(new MySqlPlugin());
             queryRunner.createCatalog("mysql", "mysql", connectorProperties);
 
@@ -275,5 +325,12 @@ public class TestMySqlIntegrationSmokeTest
                 Statement statement = connection.createStatement()) {
             statement.execute(sql);
         }
+    }
+
+    @Test
+    public void testSelectInformationSchemaColumnIsNullable()
+    {
+        assertUpdate("CREATE TABLE test_column (name VARCHAR NOT NULL, email VARCHAR)");
+        assertQuery("SELECT is_nullable FROM information_schema.columns WHERE table_name = 'test_column'", "VALUES 'NO','YES'");
     }
 }

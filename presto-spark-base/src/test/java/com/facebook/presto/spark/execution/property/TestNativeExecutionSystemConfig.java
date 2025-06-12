@@ -66,6 +66,7 @@ public class TestNativeExecutionSystemConfig
                 .setEnableVeloxExpressionLogging(false)
                 .setEnableVeloxTaskLogging(true)
                 .setHttpServerReusePort(true)
+                .setHttpServerBindToNodeInternalAddressOnlyEnabled(true)
                 .setHttpServerPort(7777)
                 .setHttpServerNumIoThreadsHwMultiplier(1.0)
                 .setHttpsServerPort(7778)
@@ -83,7 +84,9 @@ public class TestNativeExecutionSystemConfig
                 .setUseMmapAllocator(true)
                 .setMemoryArbitratorKind("SHARED")
                 .setMemoryArbitratorCapacityGb(8)
+                .setMemoryArbitratorReservedCapacityGb(0)
                 .setMemoryPoolInitCapacity(8L << 30)
+                .setMemoryPoolReservedCapacity(0)
                 .setMemoryPoolTransferCapacity(2L << 30)
                 .setMemoryReclaimWaitMs(300_000)
                 .setSpillerSpillPath("")
@@ -103,6 +106,7 @@ public class TestNativeExecutionSystemConfig
                 .setEnableVeloxExpressionLogging(true)
                 .setEnableVeloxTaskLogging(false)
                 .setHttpServerReusePort(false)
+                .setHttpServerBindToNodeInternalAddressOnlyEnabled(false)
                 .setHttpServerPort(8080)
                 .setHttpServerNumIoThreadsHwMultiplier(3.0)
                 .setHttpsServerPort(8081)
@@ -121,7 +125,9 @@ public class TestNativeExecutionSystemConfig
                 .setUseMmapAllocator(false)
                 .setMemoryArbitratorKind("")
                 .setMemoryArbitratorCapacityGb(10)
+                .setMemoryArbitratorReservedCapacityGb(8)
                 .setMemoryPoolInitCapacity(7L << 30)
+                .setMemoryPoolReservedCapacity(6L << 30)
                 .setMemoryPoolTransferCapacity(1L << 30)
                 .setMemoryReclaimWaitMs(123123123)
                 .setSpillerSpillPath("dummy.spill.path")
@@ -142,7 +148,7 @@ public class TestNativeExecutionSystemConfig
         assertRecordedDefaults(ConfigAssertions.recordDefaults(NativeExecutionNodeConfig.class)
                 .setNodeEnvironment("spark-velox")
                 .setNodeLocation("/dummy/location")
-                .setNodeIp("0.0.0.0")
+                .setNodeInternalAddress("127.0.0.1")
                 .setNodeId(0)
                 .setNodeMemoryGb(10));
 
@@ -151,7 +157,7 @@ public class TestNativeExecutionSystemConfig
                 .setNodeEnvironment("next-gen-spark")
                 .setNodeId(1)
                 .setNodeLocation("/extra/dummy/location")
-                .setNodeIp("1.1.1.1")
+                .setNodeInternalAddress("1.1.1.1")
                 .setNodeMemoryGb(40);
         Map<String, String> properties = expected.getAllProperties();
         assertFullMapping(properties, expected);
@@ -190,11 +196,10 @@ public class TestNativeExecutionSystemConfig
         Path directory = null;
         try {
             directory = Files.createTempDirectory("presto");
-            Path veloxPropertiesPath = Paths.get(directory.toString(), "velox.properties");
             Path configPropertiesPath = Paths.get(directory.toString(), "config.properties");
             Path nodePropertiesPath = Paths.get(directory.toString(), "node.properties");
             Path connectorPropertiesPath = Paths.get(directory.toString(), "catalog/hive.properties");
-            workerProperty.populateAllProperties(veloxPropertiesPath, configPropertiesPath, nodePropertiesPath, connectorPropertiesPath);
+            workerProperty.populateAllProperties(configPropertiesPath, nodePropertiesPath, connectorPropertiesPath);
 
             verifyProperties(workerProperty.getSystemConfig().getAllProperties(), readPropertiesFromDisk(configPropertiesPath));
             verifyProperties(workerProperty.getNodeConfig().getAllProperties(), readPropertiesFromDisk(nodePropertiesPath));

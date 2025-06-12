@@ -2,16 +2,24 @@
 Aggregate Functions
 ===================
 
+.. contents::
+    :local:
+    :backlinks: none
+    :depth: 1
+
+Overview
+--------
+
 Aggregate functions operate on a set of values to compute a single result.
 
-Except for :func:`count`, :func:`count_if`, :func:`max_by`, :func:`min_by` and
-:func:`approx_distinct`, all of these aggregate functions ignore null values
+Except for :func:`!count`, :func:`!count_if`, :func:`!max_by`, :func:`!min_by` and
+:func:`!approx_distinct`, all of these aggregate functions ignore null values
 and return null for no input rows or when all values are null. For example,
-:func:`sum` returns null rather than zero and :func:`avg` does not include null
+:func:`!sum` returns null rather than zero and :func:`!avg` does not include null
 values in the count. The ``coalesce`` function can be used to convert null into
 zero.
 
-Some aggregate functions such as :func:`array_agg` produce different results
+Some aggregate functions such as :func:`!array_agg` produce different results
 depending on the order of input values. This ordering can be specified by writing
 an :ref:`order-by-clause` within the aggregate function::
 
@@ -24,7 +32,24 @@ General Aggregate Functions
 
 .. function:: any_value(x) -> [same as input]
 
-    This is an alias for :func:`arbitrary`.
+    This is an alias for :func:`!arbitrary`.
+    ::
+
+       SELECT any_value(t1.age),t1.gender
+       FROM
+       (
+        SELECT *
+        FROM
+        (
+            VALUES
+                ('Alice', 30,'male'),
+                ('Bob', 25,'male'),
+                ('Charlie', 22,'female'),
+                ('Lucy', 20,'female')
+        ) AS t(name, age, gender)) t1
+       group by t1.gender;
+       --(22,female)
+       --(30,male)
 
 .. function:: arbitrary(x) -> [same as input]
 
@@ -33,83 +58,321 @@ General Aggregate Functions
 .. function:: array_agg(x) -> array<[same as input]>
 
     Returns an array created from the input ``x`` elements.
+    ::
+
+        SELECT array_agg(name)
+        FROM
+        (
+            VALUES
+                ('Alice', 30,'male'),
+                ('Bob', 25,'male'),
+                ('Charlie', 22,'female'),
+                ('Lucy', 20,'female')
+        ) AS t(name, age, gender);
+        --['Alice','Bob','Charlie','Lucy']
 
 .. function:: avg(x) -> double
 
     Returns the average (arithmetic mean) of all input values.
+    ::
+
+       SELECT avg(age)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', 20,'female')
+        ) AS t(name, age, gender);
+        --(24.25)
 
 .. function:: avg(time interval type) -> time interval type
 
     Returns the average interval length of all input values.
+    ::
+
+       SELECT avg(timediff)
+       FROM
+       (
+       	VALUES
+           (INTERVAL '10' DAY),
+           (INTERVAL '20' DAY),
+           (INTERVAL '30' DAY)
+        ) AS t(timediff);
+        --(20 00:00:00.000)//INTERVAL '20' DAY
 
 .. function:: bool_and(boolean) -> boolean
 
     Returns ``TRUE`` if every input value is ``TRUE``, otherwise ``FALSE``.
+    ::
+
+       SELECT bool_and(true_or_false)
+       FROM
+       (
+       	VALUES
+           (true),
+           (true),
+           (false)
+        ) AS t(true_or_false);
+        --(false)
 
 .. function:: bool_or(boolean) -> boolean
 
     Returns ``TRUE`` if any input value is ``TRUE``, otherwise ``FALSE``.
+    ::
+
+       SELECT bool_or(true_or_false)
+       FROM
+       (
+       	VALUES
+           (true),
+           (true),
+           (false)
+        ) AS t(true_or_false);
+        --(true)
 
 .. function:: checksum(x) -> varbinary
 
     Returns an order-insensitive checksum of the given values.
+    ::
+
+       SELECT checksum(name)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', 20,'female')
+        ) AS t(name, age, gender);
+        --(C0ACD56CF866E759)//hex format
+
+       SELECT checksum(name)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Lucy', 20,'female'),
+           ('Charlie', 22,'female')
+        ) AS t(name, age, gender);
+        --(C0ACD56CF866E759)//hex format
 
 .. function:: count(*) -> bigint
 
     Returns the number of input rows.
+    ::
+
+       SELECT count(*)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', 20,'female')
+        ) AS t(name, age, gender);
+        --(4)
+
+       SELECT count(*)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', null,'female')
+        ) AS t(name, age, gender);
+        --(4)
 
 .. function:: count(x) -> bigint
 
     Returns the number of non-null input values.
+    ::
+
+       SELECT count(age)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', 20,'female')
+        ) AS t(name, age, gender);
+        --(4)
+
+       SELECT count(age)
+       FROM
+       (
+       	VALUES
+           ('Alice', 30,'male'),
+           ('Bob', 25,'male'),
+           ('Charlie', 22,'female'),
+           ('Lucy', null,'female')
+        ) AS t(name, age, gender);
+        --(3)
 
 .. function:: count_if(x) -> bigint
 
     Returns the number of ``TRUE`` input values.
     This function is equivalent to ``count(CASE WHEN x THEN 1 END)``.
+    ::
+
+        SELECT count_if(gender = 'female') AS female_count
+        FROM (
+        VALUES
+            ('Alice', 30, 'female'),
+            ('Bob', 25, 'male'),
+            ('Lucy', 22, 'female')
+        ) AS t(name, age, gender);
+        --(2)
 
 .. function:: every(boolean) -> boolean
 
-    This is an alias for :func:`bool_and`.
+    This is an alias for :func:`!bool_and`.
 
 .. function:: geometric_mean(bigint) -> double
               geometric_mean(double) -> double
               geometric_mean(real) -> real
 
     Returns the `geometric mean <https://en.wikipedia.org/wiki/Geometric_mean>`_ of all input values.
+    ::
+
+        SELECT geometric_mean(age) AS geo_mean_age
+        FROM (
+            VALUES
+                ('Alice', 30, 'female'),
+                ('Bob', 25, 'male'),
+                ('Lucy', 22, 'female'),
+                ('Tom', 28, 'male')
+        ) AS t(name, age, gender);
+        --(26.07116834203365)
 
 .. function:: max_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the maximum value of ``y`` over all input values.
+    ::
+
+        SELECT max_by(name, age) AS oldest_person
+        FROM (
+            VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35)
+        ) AS t(name, age);
+        --(Tom)
 
 .. function:: max_by(x, y, n) -> array<[same as x]>
 
     Returns ``n`` values of ``x`` associated with the ``n`` largest of all input values of ``y``
     in descending order of ``y``.
+    ::
+
+        SELECT max_by(name, age, 2) AS top_2_oldest
+        FROM (
+            VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35),
+            ('Jerry', 33)
+        ) AS t(name, age);
+        --[Tom,Jerry]
 
 .. function:: min_by(x, y) -> [same as x]
 
     Returns the value of ``x`` associated with the minimum value of ``y`` over all input values.
+    ::
+
+        SELECT min_by(name, age) AS youngest_person
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35)
+        ) AS t(name, age);
+        --(Lucy)
 
 .. function:: min_by(x, y, n) -> array<[same as x]>
 
     Returns ``n`` values of ``x`` associated with the ``n`` smallest of all input values of ``y``
     in ascending order of ``y``.
+    ::
+
+        SELECT min_by(name, age,2) AS youngest_person
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35)
+        ) AS t(name, age);
+        --[Lucy,Bob]
 
 .. function:: max(x) -> [same as input]
 
     Returns the maximum value of all input values.
+    ::
+
+        SELECT max(age) AS max_age
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35)
+        ) AS t(name, age);
+        --(35)
 
 .. function:: max(x, n) -> array<[same as x]>
 
     Returns ``n`` largest values of all input values of ``x``.
+    ::
+
+        SELECT max(age, 3) AS top_3_ages
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35),
+            ('Jerry', 33)
+        ) AS t(name, age);
+        --[35,33,30]
 
 .. function:: min(x) -> [same as input]
 
     Returns the minimum value of all input values.
+    ::
+
+        SELECT min(age) AS min_age
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35)
+        ) AS t(name, age);
+        --(22)
 
 .. function:: min(x, n) -> array<[same as x]>
 
     Returns ``n`` smallest values of all input values of ``x``.
+    ::
+
+        SELECT min(age, 3) AS bottom_3_ages
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22),
+            ('Tom', 35),
+            ('Jerry', 33)
+        ) AS t(name, age);
+        --[22,25,30]
 
 .. function:: reduce_agg(inputValue T, initialState S, inputFunction(S,T,S), combineFunction(S,S,S)) -> S
 
@@ -127,17 +390,17 @@ General Aggregate Functions
     ``combineFunction`` is `commutative <https://en.wikipedia.org/wiki/Commutative_property>`_
     and `associative <https://en.wikipedia.org/wiki/Associative_property>`_
     operation with ``initialState`` as the
-    `identity <https://en.wikipedia.org/wiki/Identity_element>`_ value.
+    `identity <https://en.wikipedia.org/wiki/Identity_element>`_ value.::
 
-     combineFunction(s, initialState) = s for any s
+        combineFunction(s, initialState) = s for any s
 
-     combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2
+        combineFunction(s1, s2) = combineFunction(s2, s1) for any s1 and s2
 
-     combineFunction(s1, combineFunction(s2, s3)) = combineFunction(combineFunction(s1, s2), s3) for any s1, s2, s3
+        combineFunction(s1, combineFunction(s2, s3)) = combineFunction(combineFunction(s1, s2), s3) for any s1, s2, s3
 
-    In addition, make sure that the following holds for the inputFunction:
+    In addition, make sure that the following holds for the inputFunction::
 
-     inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y
+        inputFunction(inputFunction(initialState, x), y) = combineFunction(inputFunction(initialState, x), inputFunction(initialState, y)) for any x and y
 
     ::
 
@@ -176,6 +439,13 @@ General Aggregate Functions
     Returns an array created from the distinct input ``x`` elements.
 
     If the input includes ``NULL``, ``NULL`` will be included in the returned array.
+    If the input includes arrays with ``NULL`` elements or rows with ``NULL`` fields, they will
+    be included in the returned array.  This function uses ``IS DISTINCT FROM`` to determine
+    distinctness. ::
+
+        SELECT set_agg(x) FROM (VALUES(1), (2), (null), (2), (null)) t(x) -- ARRAY[1, 2, null]
+        SELECT set_agg(x) FROM (VALUES(ROW(ROW(1, null))), ROW((ROW(2, 'a'))), ROW((ROW(1, null))), (null)) t(x) -- ARRAY[ROW(1, null), ROW(2, 'a'), null]
+
 
 .. function:: set_union(array(T)) -> array(T)
 
@@ -183,6 +453,9 @@ General Aggregate Functions
 
     When all inputs are ``NULL``, this function returns an empty array. If ``NULL`` is
     an element of one of the input arrays, ``NULL`` will be included in the returned array.
+    If the input includes arrays with ``NULL`` elements or rows with ``NULL`` fields, they will
+    be included in the returned array.  This function uses ``IS DISTINCT FROM`` to determine
+    distinctness.
 
     Example::
 
@@ -205,14 +478,44 @@ Bitwise Aggregate Functions
 .. function:: bitwise_and_agg(x) -> bigint
 
     Returns the bitwise AND of all input values in 2's complement representation.
+    ::
+
+        SELECT bitwise_and_agg(flags) AS result
+        FROM (
+        VALUES
+            (7),   -- 0b0111
+            (3),   -- 0b0011
+            (1)    -- 0b0001
+        ) AS t(flags);
+        --(1) //0b0001
 
 .. function:: bitwise_or_agg(x) -> bigint
 
     Returns the bitwise OR of all input values in 2's complement representation.
+    ::
+
+        SELECT bitwise_or_agg(flags) AS result
+        FROM (
+        VALUES
+            (7),   -- 0b0111
+            (3),   -- 0b0011
+            (1)    -- 0b0001
+        ) AS t(flags);
+        --(7) //0b0111
 
 .. function:: bitwise_xor_agg(x) -> bigint
 
     Returns the bitwise XOR of all input values in 2's complement representation.
+    ::
+
+        SELECT bitwise_xor_agg(flags) AS result
+        FROM (
+        VALUES
+            (7),   -- 0b0111
+            (3),   -- 0b0011
+            (1)    -- 0b0001
+        ) AS t(flags);
+        --(5) //0b0101
 
 Map Aggregate Functions
 -----------------------
@@ -220,25 +523,81 @@ Map Aggregate Functions
 .. function:: histogram(x) -> map(K,bigint)
 
     Returns a map containing the count of the number of times each input value occurs.
+    ::
+
+        SELECT histogram(age) AS age_histogram
+        FROM (
+        VALUES
+            (30),
+            (25),
+            (30),
+            (22),
+            (25),
+            (30)
+        ) AS t(age);
+        --{22->1, 25->2, 30->3}
 
 .. function:: map_agg(key, value) -> map(K,V)
 
     Returns a map created from the input ``key`` / ``value`` pairs.
+    ::
+
+        SELECT map_agg(name, age) AS name_age_map
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Lucy', 22)
+        ) AS t(name, age);
+        --{Bob->25, Alice->30, Lucy->22}
 
 .. function:: map_union(x(K,V)) -> map(K,V)
 
    Returns the union of all the input maps. If a key is found in multiple
    input maps, that key's value in the resulting map comes from an arbitrary input map.
+   ::
+
+        SELECT map_union(maps) AS merged_map
+        FROM (
+        VALUES
+            (MAP(ARRAY['a', 'b'], ARRAY[1, 2])),
+            (MAP(ARRAY['b', 'c'], ARRAY[3, 4])),
+            (MAP(ARRAY['d'], ARRAY[5]))
+        ) AS t(maps);
+        --{a->1, b->2, c->4, d->5}
 
 .. function:: map_union_sum(x(K,V)) -> map(K,V)
 
       Returns the union of all the input maps summing the values of matching keys in all
       the maps. All null values in the original maps are coalesced to 0.
+      ::
+
+            SELECT map_union_sum(maps) AS merged_sum_map
+            FROM (
+            VALUES
+                (MAP(ARRAY['a', 'b'], ARRAY[1, 2])),
+                (MAP(ARRAY['b', 'c'], ARRAY[3, 4])),
+                (MAP(ARRAY['a', 'd'], ARRAY[5, 6]))
+            ) AS t(maps);
+            --{'a'->6,'b'->5,'c'->4,'d'->6}
 
 .. function:: multimap_agg(key, value) -> map(K,array(V))
 
     Returns a multimap created from the input ``key`` / ``value`` pairs.
     Each key can be associated with multiple values.
+
+    ::
+
+        SELECT multimap_agg(name, age) AS name_age_multimap
+        FROM (
+        VALUES
+            ('Alice', 30),
+            ('Bob', 25),
+            ('Alice', 32),
+            ('Lucy', 22),
+            ('Bob', 28)
+        ) AS t(name, age);
+        --{Bob->[25, 28], Alice->[30, 32], Lucy->[22]}
 
 Approximate Aggregate Functions
 -------------------------------
@@ -253,6 +612,19 @@ Approximate Aggregate Functions
     standard deviation of the (approximately normal) error distribution over
     all possible sets. It does not guarantee an upper bound on the error for
     any specific input set.
+    ::
+
+        SELECT approx_distinct(name) AS distinct_names
+        FROM (
+        VALUES
+            ('Alice'),
+            ('Bob'),
+            ('Alice'),
+            ('Lucy'),
+            ('Bob'),
+            ('Tom')
+        ) AS t(name);
+        --(4)
 
 .. function:: approx_distinct(x, e) -> bigint
 
@@ -265,12 +637,37 @@ Approximate Aggregate Functions
     over all possible sets. It does not guarantee an upper bound on the error
     for any specific input set. The current implementation of this function
     requires that ``e`` be in the range of ``[0.0040625, 0.26000]``.
+    ::
+
+        SELECT approx_distinct(gender, 0.01) AS estimated_distinct_gender
+        FROM (
+        VALUES 
+            ('Alice', 30, 'female'),
+            ('Bob', 25, 'male'),
+            ('Lucy', 22, 'female'),
+            ('Tom', 40, 'male'),
+            ('Amy', 35, 'female')
+        ) AS t(name, age, gender);
+        --(2)
 
 .. function:: approx_percentile(x, percentage) -> [same as x]
 
     Returns the approximate percentile for all input values of ``x`` at the
     given ``percentage``. The value of ``percentage`` must be between zero and
     one and must be constant for all input rows.
+    ::
+
+        SELECT approx_percentile(age, 0.5) AS median_age
+        FROM (
+        VALUES
+            (30),
+            (25),
+            (22),
+            (35),
+            (33),
+            (28)
+        ) AS t(age);
+        --(30)
 
 .. function:: approx_percentile(x, percentage, accuracy) -> [same as x]
 
@@ -279,17 +676,56 @@ Approximate Aggregate Functions
     (exclusive) and must be constant for all input rows. Note that a lower
     "accuracy" is really a lower error threshold, and thus more accurate. The
     default accuracy is ``0.01``.
+    ::
+
+        SELECT approx_percentile(age, 0.5, 0.9) AS median_age
+        FROM (
+        VALUES
+            (30),
+            (25),
+            (22),
+            (35),
+            (33),
+            (28)
+        ) AS t(age);
+        --(30)
 
 .. function:: approx_percentile(x, percentages) -> array<[same as x]>
 
     Returns the approximate percentile for all input values of ``x`` at each of
     the specified percentages. Each element of the ``percentages`` array must be
     between zero and one, and the array must be constant for all input rows.
+    ::
+
+        SELECT approx_percentile(age, ARRAY[0.25, 0.5, 0.75]) AS percentiles
+        FROM (
+        VALUES
+            (22),
+            (25),
+            (28),
+            (30),
+            (33),
+            (35)
+        ) AS t(age);
+        --[25,30,33]
 
 .. function:: approx_percentile(x, percentages, accuracy) -> array<[same as x]>
 
     As ``approx_percentile(x, percentages)``, but with a maximum rank error of
     ``accuracy``.
+    ::
+
+        SELECT approx_percentile(age, ARRAY[0.25, 0.5, 0.75], 0.9) AS percentiles
+        FROM (
+        VALUES
+            (22),
+            (25),
+            (28),
+            (30),
+            (33),
+            (35)
+        ) AS t(age);
+        --[25,30,33]
 
 .. function:: approx_percentile(x, w, percentage) -> [same as x]
 
@@ -298,11 +734,37 @@ Approximate Aggregate Functions
     an integer value of at least one. It is effectively a replication count for
     the value ``x`` in the percentile set. The value of ``p`` must be between
     zero and one and must be constant for all input rows.
+    ::
+
+        SELECT approx_percentile(age, weight, 0.5) AS weighted_median
+        FROM (
+        VALUES
+            (22, 1),
+            (25, 2),
+            (28, 1),
+            (30, 3),
+            (33, 1),
+            (35, 2)
+        ) AS t(age, weight);
+        --(30)
 
 .. function:: approx_percentile(x, w, percentage, accuracy) -> [same as x]
 
     As ``approx_percentile(x, w, percentage)``, but with a maximum rank error of
     ``accuracy``.
+    ::
+
+        SELECT approx_percentile(age, weight, 0.5, 0.9) AS weighted_median
+        FROM (
+        VALUES
+            (22, 1),
+            (25, 2),
+            (28, 1),
+            (30, 3),
+            (33, 1),
+            (35, 2)
+        ) AS t(age, weight);
+        --(30)
 
 .. function:: approx_percentile(x, w, percentages) -> array<[same as x]>
 
@@ -312,27 +774,88 @@ Approximate Aggregate Functions
     effectively a replication count for the value ``x`` in the percentile set.
     Each element of the array must be between zero and one, and the array must
     be constant for all input rows.
+    ::
+
+        SELECT approx_percentile(age, weight, ARRAY[0.25, 0.5, 0.75]) AS weighted_percentiles
+        FROM (
+        VALUES
+            (22, 1),
+            (25, 2),
+            (28, 1),
+            (30, 3),
+            (33, 1),
+            (35, 2)
+        ) AS t(age, weight);
+        -[25,30,33]
 
 .. function:: approx_percentile(x, w, percentages, accuracy) -> array<[same as x]>
 
     As ``approx_percentile(x, w, percentages)``, but with a maximum rank error of
     ``accuracy``.
+    ::
 
+        SELECT approx_percentile(age, weight, ARRAY[0.25, 0.5, 0.75],0.9) AS weighted_percentiles
+        FROM (
+        VALUES
+            (22, 1),
+            (25, 2),
+            (28, 1),
+            (30, 3),
+            (33, 1),
+            (35, 2)
+        ) AS t(age, weight);
+        -[25,30,33]
 
 .. function:: approx_set(x) -> HyperLogLog
     :noindex:
 
     See :doc:`hyperloglog`.
+    ::
+
+        SELECT approx_set(user_id) AS hll_data
+        FROM (
+        VALUES
+            (1001),
+            (1002),
+            (1003),
+            (1001),
+            (1004)
+        ) AS t(user_id);
+        --(020C0400401E4D1D4081707280E083BD444759E9)//hex format
 
 .. function:: merge(x) -> HyperLogLog
     :noindex:
 
     See :doc:`hyperloglog`.
+    ::
+
+        WITH hll_data AS (
+        SELECT region, approx_set(user_id) AS hll
+        FROM (
+            VALUES
+            ('east', 1),
+            ('east', 2),
+            ('west', 2),
+            ('west', 3),
+            ('west', 4)
+        ) AS t(region, user_id)
+        GROUP BY region
+        )
+        SELECT cardinality(merge(hll)) AS total_unique_users
+        FROM hll_data;
+        --(4)
 
 .. function:: khyperloglog_agg(x) -> KHyperLogLog
     :noindex:
 
     See :doc:`khyperloglog`.
+    ::
+
+        SELECT cardinality(khyperloglog_agg(x,y))
+        FROM (
+        VALUES (1,101), (2,102), (3,103), (4,101), (5,104)
+        ) AS t(x,y);
+        --(5)
 
 .. function:: merge(qdigest(T)) -> qdigest(T)
     :noindex:
@@ -362,184 +885,31 @@ Approximate Aggregate Functions
     weight of the bin.  The algorithm is based loosely on [BenHaimTomTov2010]_.
 
     ``buckets`` must be a ``bigint``. ``value`` and ``weight`` must be numeric.
+    ::
+
+        SELECT numeric_histogram(3, v, 1.0)
+        FROM (
+         VALUES (10),
+                (15),
+                (20),
+                (25),
+                (30)
+        ) AS t(v);
+        --{30.0->1.0, 22.5->2.0, 12.5->2.0}
 
 .. function:: numeric_histogram(buckets, value) -> map<double, double>
 
     Computes an approximate histogram with up to ``buckets`` number of buckets
     for all ``value``\ s. This function is equivalent to the variant of
-    :func:`numeric_histogram` that takes a ``weight``, with a per-item weight of ``1``.
+    :func:`!numeric_histogram` that takes a ``weight``, with a per-item weight of ``1``.
     In this case, the total weight in the returned map is the count of items in the bin.
-
-.. function:: noisy_count_gaussian(x, noise_scale) -> bigint
-
-    Counts the non-null values and then adds a random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale`` to the true count.
-    The noisy count is post-processed to be non-negative and rounded to bigint.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_count_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_count_gaussian(x, noise_scale, random_seed) -> bigint
-
-    Counts the non-null values and then adds a random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale`` to the true count.
-    The noisy count is post-processed to be non-negative and rounded to bigint.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_count_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_count_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
-.. function:: noisy_count_if_gaussian(x, noise_scale) -> bigint
-
-    Counts the `TRUE` values and then adds a random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale`` to the true count.
-    The noisy count is post-processed to be non-negative and rounded to bigint.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_count_if_gaussian(orderkey > 10, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_count_if_gaussian(orderkey > 10, 20.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_count_if_gaussian(x, noise_scale, random_seed) -> bigint
-
-    Counts the `TRUE` values and then adds a random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale`` to the true count.
-    The noisy count is post-processed to be non-negative and rounded to bigint.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_count_if_gaussian(orderkey > 10, 20.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_count_if_gaussian(orderkey > 10, 20.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
-.. function:: noisy_sum_gaussian(x, noise_scale) -> double
-
-    Calculates the sum over the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the sum, and the return type is double.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_sum_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_sum_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_sum_gaussian(x, noise_scale, random_seed) -> double
-
-    Calculates the sum over the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the sum, and the return type is double.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
-.. function:: noisy_sum_gaussian(x, noise_scale, lower, upper) -> double
-
-    Calculates the sum over the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the sum, and the return type is double.
-
-    Each value is clipped to the range of ``[lower, upper]`` before adding to the sum.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 10.0, 50.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 10.0, 51.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_sum_gaussian(x, noise_scale, lower, upper, random_seed) -> double
-
-    Calculates the sum over the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the sum, and the return type is double.
-
-    Each value is clipped to the range of ``[lower, upper]`` before adding to the sum.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 10.0, 50.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_sum_gaussian(orderkey, 20.0, 10.0, 50.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
-.. function:: noisy_avg_gaussian(x, noise_scale) -> double
-
-    Calculates the average (arithmetic mean) of all the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the avg, and the return type is double.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_avg_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_avg_gaussian(orderkey, 20.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_avg_gaussian(x, noise_scale, random_seed) -> double
-
-    Calculates the average (arithmetic mean) of all the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the avg, and the return type is double.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
-.. function:: noisy_avg_gaussian(x, noise_scale, lower, upper) -> double
-
-    Calculates the average (arithmetic mean) of all the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the avg, and the return type is double.
-
-    Each value is clipped to the range of ``[lower, upper]`` before adding to the avg.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Noise is from a secure random. ::
-
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 10.0, 50.0) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 10.0, 51.0) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; -- (0 row)
-
-.. function:: noisy_avg_gaussian(x, noise_scale, lower, upper, random_seed) -> double
-
-    Calculates the average (arithmetic mean) of all the input values and then adds random Gaussian noise
-    with 0 mean and standard deviation of ``noise_scale``.
-    All values are converted to double before being added to the avg, and the return type is double.
-
-    Each value is clipped to the range of ``[lower, upper]`` before adding to the avg.
-
-    When there are no input rows, this function returns ``NULL``.
-
-    Random seed is used to seed the random generator.
-    This method does not use a secure random. ::
-
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 10.0, 50.0, 321) FROM tpch.tiny.lineitem WHERE false; -- NULL (1 row)
-        SELECT noisy_avg_gaussian(orderkey, 20.0, 10.0, 50.0, 321) FROM tpch.tiny.lineitem WHERE false  GROUP BY orderkey; --  (0 row)
-
+    ::
+
+        SELECT numeric_histogram(3, v)
+        FROM (
+        VALUES (10.0), (15.0), (20.0), (25.0), (30.0)
+        ) AS t(v);
+        --{30.0->1.0, 22.5->2.0, 12.5->2.0}
 
 Statistical Aggregate Functions
 -------------------------------
@@ -547,14 +917,50 @@ Statistical Aggregate Functions
 .. function:: corr(y, x) -> double
 
     Returns correlation coefficient of input values.
+    ::
+
+        SELECT corr(score, study_hours)
+        FROM (
+        VALUES 
+            (85, 2),
+            (90, 3),
+            (95, 4),
+            (70, 1),
+            (80, 2)
+        ) AS t(score, study_hours);
+        --(0.95751756)
 
 .. function:: covar_pop(y, x) -> double
 
     Returns the population covariance of input values.
+    ::
+
+        SELECT covar_pop(score, study_hours)
+        FROM (
+        VALUES 
+            (85, 2),
+            (90, 3),
+            (95, 4),
+            (70, 1),
+            (80, 2)
+        ) AS t(score, study_hours);
+        --(8.4)
 
 .. function:: covar_samp(y, x) -> double
 
     Returns the sample covariance of input values.
+    ::
+
+        SELECT covar_samp(score, hours)
+        FROM (
+        VALUES 
+            (85, 2),
+            (90, 3),
+            (95, 4),
+            (70, 1),
+            (80, 2)
+        ) AS t(score, hours);
+        --(10.5)
 
 .. function:: entropy(c) -> double
 
@@ -568,6 +974,18 @@ Statistical Aggregate Functions
 
     The function ignores any ``NULL`` count. If the sum of non-``NULL`` counts is 0,
     it returns 0.
+    ::
+
+        SELECT entropy(category)
+        FROM (
+        VALUES 
+            (1),
+            (1),
+            (2),
+            (1),
+            (2)
+        ) AS t(category);
+        --(2.2359263506290326)
 
 .. function:: kurtosis(x) -> double
 
@@ -579,80 +997,282 @@ Statistical Aggregate Functions
         \mathrm{kurtosis}(x) = {n(n+1) \over (n-1)(n-2)(n-3)} { \sum[(x_i-\mu)^4] \over \sigma^4} -3{ (n-1)^2 \over (n-2)(n-3) }
 
     where :math:`\mu` is the mean, and :math:`\sigma` is the standard deviation.
+    ::
+
+        SELECT kurtosis(salary)
+        FROM (
+        VALUES (1000),
+                (1200),
+                (1100),
+                (1500),
+                (900),
+                (2500)
+        ) AS t(salary);
+        --(3.549458572481891)
 
 .. function:: regr_intercept(y, x) -> double
 
     Returns linear regression intercept of input values. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_intercept(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (40, 6000)
+        ) AS t(age, salary);
+        --(-2000)
 
 .. function:: regr_slope(y, x) -> double
 
     Returns linear regression slope of input values. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_slope(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (40, 6000)
+        ) AS t(age, salary);
+        --(200)
 
 .. function:: regr_avgx(y, x) -> double
 
     Returns the average of the independent value in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_avgx(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(30)
 
 .. function:: regr_avgy(y, x) -> double
 
     Returns the average of the dependent value in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_avgy(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(4000)
 
 .. function:: regr_count(y, x) -> double
 
     Returns the number of non-null pairs of input values. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_count(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(3)
+
 
 .. function:: regr_r2(y, x) -> double
 
     Returns the coefficient of determination of the linear regression. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_r2(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(1)
 
 .. function:: regr_sxy(y, x) -> double
 
     Returns the sum of the product of the dependent and independent values in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_sxy(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(10000)
 
 .. function:: regr_syy(y, x) -> double
 
     Returns the sum of the squares of the dependent values in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_syy(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(2000000)
 
 .. function:: regr_sxx(y, x) -> double
 
     Returns the sum of the squares of the independent values in a group. ``y`` is the dependent
     value. ``x`` is the independent value.
+    ::
+
+        SELECT regr_sxx(salary, age)
+        FROM (
+        VALUES 
+            (25, 3000),
+            (30, 4000),
+            (35, 5000),
+            (NULL, 6000),
+            (40, NULL)
+        ) AS t(age, salary);
+        --(50)
 
 .. function:: skewness(x) -> double
 
     Returns the skewness of all input values.
+    ::
+
+        SELECT skewness(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (10000)
+        ) AS t(salary);
+        --(0.8978957037987336)
 
 .. function:: stddev(x) -> double
 
-    This is an alias for :func:`stddev_samp`.
+    This is an alias for :func:`!stddev_samp`.
+    ::
+
+        SELECT stddev(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(1581.1388300841897)
 
 .. function:: stddev_pop(x) -> double
 
     Returns the population standard deviation of all input values.
+    ::
+
+        SELECT stddev_pop(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(1414.213562373095)
 
 .. function:: stddev_samp(x) -> double
 
     Returns the sample standard deviation of all input values.
+    ::
+
+        SELECT stddev_samp(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(1581.1388300841897)
 
 .. function:: variance(x) -> double
 
-    This is an alias for :func:`var_samp`.
+    This is an alias for :func:`!var_samp`.
+    ::
+
+        SELECT variance(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(2500000.0)
 
 .. function:: var_pop(x) -> double
 
     Returns the population variance of all input values.
+    ::
+
+        SELECT var_pop(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(2000000.0)
 
 .. function:: var_samp(x) -> double
 
     Returns the sample variance of all input values.
+    ::
 
+        SELECT var_samp(salary)
+        FROM (
+        VALUES 
+            (3000),
+            (4000),
+            (5000),
+            (6000),
+            (7000)
+        ) AS t(salary);
+        --(2500000.0)
 
 Classification Metrics Aggregate Functions
 ------------------------------------------
@@ -663,62 +1283,62 @@ classification thresholds. They are meant to be used in conjunction.
 
 For example, to find the `precision-recall curve <https://en.wikipedia.org/wiki/Precision_and_recall>`_, use
 
-    .. code-block:: none
+.. code-block:: none
 
-         WITH
-             recall_precision AS (
-                 SELECT
-                     CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
-                     CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
-                 FROM
-                    classification_dataset
-             )
-         SELECT
-             recall,
-             precision
-         FROM
-             recall_precision
-         CROSS JOIN UNNEST(recalls, precisions) AS t(recall, precision)
+    WITH
+        recall_precision AS (
+            SELECT
+                CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
+                CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
+            FROM
+                classification_dataset
+        )
+    SELECT
+        recall,
+        precision
+    FROM
+        recall_precision
+    CROSS JOIN UNNEST(recalls, precisions) AS t(recall, precision)
 
 To get the corresponding thresholds for these values, use
 
-    .. code-block:: none
+.. code-block:: none
 
-         WITH
-             recall_precision AS (
-                 SELECT
-                     CLASSIFICATION_THRESHOLDS(10000, correct, pred) AS thresholds,
-                     CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
-                     CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
-                 FROM
-                    classification_dataset
-             )
-         SELECT
-             threshold,
-             recall,
-             precision
-         FROM
-             recall_precision
-         CROSS JOIN UNNEST(thresholds, recalls, precisions) AS t(threshold, recall, precision)
+    WITH
+        recall_precision AS (
+            SELECT
+                CLASSIFICATION_THRESHOLDS(10000, correct, pred) AS thresholds,
+                CLASSIFICATION_RECALL(10000, correct, pred) AS recalls,
+                CLASSIFICATION_PRECISION(10000, correct, pred) AS precisions
+            FROM
+                classification_dataset
+        )
+    SELECT
+        threshold,
+        recall,
+        precision
+    FROM
+        recall_precision
+    CROSS JOIN UNNEST(thresholds, recalls, precisions) AS t(threshold, recall, precision)
 
 To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_characteristic>`_, use
 
-    .. code-block:: none
+.. code-block:: none
 
-         WITH
-             fallout_recall AS (
-                 SELECT
-                     CLASSIFICATION_FALLOUT(10000, correct, pred) AS fallouts,
-                     CLASSIFICATION_RECALL(10000, correct, pred) AS recalls
-                 FROM
-                    classification_dataset
-             )
-         SELECT
-             fallout
-             recall,
-         FROM
-             recall_fallout
-         CROSS JOIN UNNEST(fallouts, recalls) AS t(fallout, recall)
+    WITH
+        fallout_recall AS (
+            SELECT
+                CLASSIFICATION_FALLOUT(10000, correct, pred) AS fallouts,
+                CLASSIFICATION_RECALL(10000, correct, pred) AS recalls
+            FROM
+                classification_dataset
+        )
+    SELECT
+        fallout
+        recall,
+    FROM
+        recall_fallout
+    CROSS JOIN UNNEST(fallouts, recalls) AS t(fallout, recall)
 
 
 .. function:: classification_miss_rate(buckets, y, x, weight) -> array<double>
@@ -750,7 +1370,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
 .. function:: classification_miss_rate(buckets, y, x) -> array<double>
 
     This function is equivalent to the variant of
-    :func:`classification_miss_rate` that takes a ``weight``, with a per-item weight of ``1``.
+    :func:`!classification_miss_rate` that takes a ``weight``, with a per-item weight of ``1``.
 
 .. function:: classification_fall_out(buckets, y, x, weight) -> array<double>
 
@@ -779,7 +1399,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
 .. function:: classification_fall_out(buckets, y, x) -> array<double>
 
     This function is equivalent to the variant of
-    :func:`classification_fall_out` that takes a ``weight``, with a per-item weight of ``1``.
+    :func:`!classification_fall_out` that takes a ``weight``, with a per-item weight of ``1``.
 
 .. function:: classification_precision(buckets, y, x, weight) -> array<double>
 
@@ -808,7 +1428,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
 .. function:: classification_precision(buckets, y, x) -> array<double>
 
     This function is equivalent to the variant of
-    :func:`classification_precision` that takes a ``weight``, with a per-item weight of ``1``.
+    :func:`!classification_precision` that takes a ``weight``, with a per-item weight of ``1``.
 
 .. function:: classification_recall(buckets, y, x, weight) -> array<double>
 
@@ -837,7 +1457,7 @@ To find the `ROC curve <https://en.wikipedia.org/wiki/Receiver_operating_charact
 .. function:: classification_recall(buckets, y, x) -> array<double>
 
     This function is equivalent to the variant of
-    :func:`classification_recall` that takes a ``weight``, with a per-item weight of ``1``.
+    :func:`!classification_recall` that takes a ``weight``, with a per-item weight of ``1``.
 
 .. function:: classification_thresholds(buckets, y, x) -> array<double>
 
@@ -877,10 +1497,10 @@ where :math:`f(x)` is the partial density function of :math:`x`.
 
     .. code-block:: none
 
-         SELECT
-             differential_entropy(1000000, x)
-         FROM
-             data
+        SELECT
+            differential_entropy(1000000, x)
+        FROM
+            data
 
     .. note::
 
@@ -959,12 +1579,12 @@ where :math:`f(x)` is the partial density function of :math:`x`.
     To find the differential entropy of ``x``, each between ``-2.0`` and ``2.0``,
     with weights ``weight`` of ``data`` using 1000000 buckets and maximum-likelihood estimates, use
 
-        .. code-block:: none
+    .. code-block:: none
 
-             SELECT
-                 differential_entropy(1000000, x, weight, 'fixed_histogram_mle', -2.0, 2.0)
-             FROM
-                 data
+        SELECT
+            differential_entropy(1000000, x, weight, 'fixed_histogram_mle', -2.0, 2.0)
+        FROM
+            data
 
     .. note::
 
@@ -1108,7 +1728,12 @@ equal probability of being chosen. See [Vitter1985]_.
         -----------------+----------------------------------
                        5 | [{idx=1, val=a}, {idx=5, val=e}]
 
-    
+
+Noisy Aggregate Functions
+-------------------------
+
+See :doc:`noisy`.
+
 
 ---------------------------
 

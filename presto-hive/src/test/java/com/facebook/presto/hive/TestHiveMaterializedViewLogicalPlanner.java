@@ -19,12 +19,12 @@ import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.MetastoreContext;
 import com.facebook.presto.hive.metastore.PrincipalPrivileges;
 import com.facebook.presto.hive.metastore.Table;
+import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.AbstractTestQueryFramework;
@@ -34,6 +34,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import org.testng.annotations.Test;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -84,8 +85,9 @@ import static io.airlift.tpch.TpchTable.NATION;
 import static io.airlift.tpch.TpchTable.ORDERS;
 import static io.airlift.tpch.TpchTable.SUPPLIER;
 import static java.lang.String.format;
+import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.joining;
-import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertTrue;
 
 @Test(singleThreaded = true)
@@ -480,7 +482,7 @@ public class TestHiveMaterializedViewLogicalPlanner
             assertUpdate(format("CREATE MATERIALIZED VIEW %s WITH (partitioned_by = ARRAY['nationkey']) " +
                     "AS %s", view, baseQuery));
 
-            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE nationkey < 10", view, baseQuery), 599);
+            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE nationkey < 10", view), 599);
 
             String viewQuery = format("SELECT name, custkey, nationkey from %s ORDER BY name", view);
             baseQuery = format("%s ORDER BY name", baseQuery);
@@ -810,7 +812,7 @@ public class TestHiveMaterializedViewLogicalPlanner
             // from sampled table and full table
             String viewHalfQuery = format("SELECT * from %s ORDER BY nationkey", viewHalf);
             MaterializedResult viewHalfTable = computeActual(viewHalfQuery);
-            assertFalse(viewFullTable.equals(viewHalfTable));
+            assertNotEquals(viewFullTable, viewHalfTable);
         }
         finally {
             queryRunner.execute("DROP MATERIALIZED VIEW IF EXISTS " + viewFull);
@@ -837,7 +839,7 @@ public class TestHiveMaterializedViewLogicalPlanner
             assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE regionkey = 1", view), 5);
 
             String viewQuery = format("SELECT name, nationkey, regionkey from %s ORDER BY name", view);
-            String baseQuery = format("%s ORDER BY name", viewDefinition, table);
+            String baseQuery = format("%s ORDER BY name", viewDefinition);
 
             MaterializedResult viewTable = computeActual(viewQuery);
             MaterializedResult baseTable = computeActual(baseQuery);
@@ -908,7 +910,7 @@ public class TestHiveMaterializedViewLogicalPlanner
                     "FROM %s group by ds, shipmode", view, table));
 
             assertTrue(getQueryRunner().tableExists(getSession(), view));
-            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE ds='2020-01-01'", view, table), 7);
+            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE ds='2020-01-01'", view), 7);
 
             String viewQuery = format("SELECT sum(_discount_multi_extendedprice_) from %s group by ds ORDER BY sum(_discount_multi_extendedprice_)", view);
             String baseQuery = format("SELECT sum(discount * extendedprice) as _discount_multi_extendedprice_ from %s group by ds " +
@@ -1800,10 +1802,10 @@ public class TestHiveMaterializedViewLogicalPlanner
                     view, table1, table2, table3));
 
             assertQueryFails(format("CREATE MATERIALIZED VIEW should_fail WITH (partitioned_by = ARRAY['ds']) AS " +
-                            "SELECT t1.orderkey AS view_orderkey, t2.totalprice AS view_totalprice, t3.orderstatus AS view_orderstatus, t1.ds " +
-                            "FROM %s t1 INNER JOIN %s t2 ON (t1.ds=t2.ds AND t1.orderkey = t2.orderkey) INNER JOIN %s t3" +
-                            " ON (t1.orderkey = t3.orderkey)",
-                    table1, table2, table3),
+                                    "SELECT t1.orderkey AS view_orderkey, t2.totalprice AS view_totalprice, t3.orderstatus AS view_orderstatus, t1.ds " +
+                                    "FROM %s t1 INNER JOIN %s t2 ON (t1.ds=t2.ds AND t1.orderkey = t2.orderkey) INNER JOIN %s t3" +
+                                    " ON (t1.orderkey = t3.orderkey)",
+                            table1, table2, table3),
                     "Materialized view tpch.should_fail must have at least one partition column" +
                             " that exists in orders_status_partitioned_join as well");
 
@@ -2242,11 +2244,10 @@ public class TestHiveMaterializedViewLogicalPlanner
                     "t1.ds as ds, t1.orderpriority as view_orderpriority, t2.orderstatus as view_orderstatus " +
                     " FROM %s t1 inner join %s t2 ON t1.ds=t2.ds", view, table1, table2));
 
-            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE ds='2020-01-01'", view, table1, table2), 65025);
+            assertUpdate(format("REFRESH MATERIALIZED VIEW %s WHERE ds='2020-01-01'", view), 65025);
 
             String viewQuery = format("SELECT view_orderkey from %s where view_orderkey < 10000 ORDER BY view_orderkey", view);
-            String baseQuery = format("SELECT t1.orderkey FROM %s t1" +
-                    " inner join %s t2 ON t1.ds=t2.ds where t1.orderkey < 10000 ORDER BY t1.orderkey", table1, table2);
+            String baseQuery = format("SELECT t1.orderkey FROM %s t1 inner join %s t2 ON t1.ds=t2.ds where t1.orderkey < 10000 ORDER BY t1.orderkey", table1, table2);
 
             MaterializedResult viewTable = computeActual(viewQuery);
             MaterializedResult baseTable = computeActual(baseQuery);
@@ -2734,13 +2735,13 @@ public class TestHiveMaterializedViewLogicalPlanner
 
     private void appendTableParameter(ExtendedHiveMetastore metastore, String tableName, String parameterKey, String parameterValue)
     {
-        MetastoreContext metastoreContext = new MetastoreContext(getSession().getUser(), getSession().getQueryId().getId(), Optional.empty(), Optional.empty(), Optional.empty(), false, HiveColumnConverterProvider.DEFAULT_COLUMN_CONVERTER_PROVIDER, getSession().getWarningCollector());
+        MetastoreContext metastoreContext = new MetastoreContext(getSession().getUser(), getSession().getQueryId().getId(), Optional.empty(), Collections.emptySet(), Optional.empty(), Optional.empty(), false, HiveColumnConverterProvider.DEFAULT_COLUMN_CONVERTER_PROVIDER, getSession().getWarningCollector(), getSession().getRuntimeStats());
         Optional<Table> table = metastore.getTable(metastoreContext, getSession().getSchema().get(), tableName);
         if (table.isPresent()) {
             Table originalTable = table.get();
             Table alteredTable = Table.builder(originalTable).setParameter(parameterKey, parameterValue).build();
             metastore.dropTable(metastoreContext, originalTable.getDatabaseName(), originalTable.getTableName(), false);
-            metastore.createTable(metastoreContext, alteredTable, new PrincipalPrivileges(ImmutableMultimap.of(), ImmutableMultimap.of()));
+            metastore.createTable(metastoreContext, alteredTable, new PrincipalPrivileges(ImmutableMultimap.of(), ImmutableMultimap.of()), emptyList());
         }
     }
 }

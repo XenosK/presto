@@ -16,6 +16,7 @@
 
 #include "presto_cpp/main/common/Configs.h"
 #include "presto_cpp/main/operators/UnsafeRowExchangeSource.h"
+#include "velox/serializers/RowSerializer.h"
 
 namespace facebook::presto::operators {
 
@@ -31,12 +32,12 @@ namespace facebook::presto::operators {
 folly::SemiFuture<UnsafeRowExchangeSource::Response>
 UnsafeRowExchangeSource::request(
     uint32_t /*maxBytes*/,
-    uint32_t /*maxWaitSeconds*/) {
+    std::chrono::microseconds /*maxWait*/) {
   auto nextBatch = [this]() {
     return std::move(shuffle_->next())
         .deferValue([this](velox::BufferPtr buffer) {
           std::vector<velox::ContinuePromise> promises;
-          int64_t totalBytes = 0;
+          int64_t totalBytes{0};
 
           {
             std::lock_guard<std::mutex> l(queue_->mutex());
@@ -45,14 +46,25 @@ UnsafeRowExchangeSource::request(
               queue_->enqueueLocked(nullptr, promises);
             } else {
               totalBytes = buffer->size();
+              VELOX_CHECK_LE(totalBytes, std::numeric_limits<int32_t>::max());
 
               ++numBatches_;
+              velox::serializer::detail::RowGroupHeader rowHeader{
+                  .uncompressedSize = static_cast<int32_t>(totalBytes),
+                  .compressedSize = static_cast<int32_t>(totalBytes),
+                  .compressed = false};
+              auto headBuffer = std::make_shared<std::string>(
+                  velox::serializer::detail::RowGroupHeader::size(), '0');
+              rowHeader.write(const_cast<char*>(headBuffer->data()));
 
-              auto ioBuf =
-                  folly::IOBuf::wrapBuffer(buffer->as<char>(), buffer->size());
+              auto ioBuf = folly::IOBuf::wrapBuffer(
+                  headBuffer->data(), headBuffer->size());
+              ioBuf->appendToChain(
+                  folly::IOBuf::wrapBuffer(buffer->as<char>(), buffer->size()));
               queue_->enqueueLocked(
                   std::make_unique<velox::exec::SerializedPage>(
-                      std::move(ioBuf), [buffer](auto& /*unused*/) {}),
+                      std::move(ioBuf),
+                      [buffer, headBuffer](auto& /*unused*/) {}),
                   promises);
             }
           }
@@ -71,6 +83,19 @@ UnsafeRowExchangeSource::request(
   };
 
   CALL_SHUFFLE(return nextBatch(), "next");
+}
+
+folly::SemiFuture<UnsafeRowExchangeSource::Response>
+UnsafeRowExchangeSource::requestDataSizes(
+    std::chrono::microseconds /*maxWait*/) {
+  std::vector<int64_t> remainingBytes;
+  if (!atEnd_) {
+    // Use default value of ExchangeClient::getAveragePageSize() for now.
+    //
+    // TODO: Change ShuffleReader to return the next batch size.
+    remainingBytes.push_back(1 << 20);
+  }
+  return folly::makeSemiFuture(Response{0, atEnd_, std::move(remainingBytes)});
 }
 
 folly::F14FastMap<std::string, int64_t> UnsafeRowExchangeSource::stats() const {
@@ -122,4 +147,4 @@ UnsafeRowExchangeSource::createExchangeSource(
           serializedShuffleInfo.value(), destination, pool),
       pool);
 }
-}; // namespace facebook::presto::operators
+} // namespace facebook::presto::operators

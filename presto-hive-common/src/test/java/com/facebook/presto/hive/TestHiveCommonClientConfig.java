@@ -23,6 +23,7 @@ import org.testng.annotations.Test;
 import java.util.Map;
 
 import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.HARD_AFFINITY;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 
 public class TestHiveCommonClientConfig
 {
@@ -47,7 +48,9 @@ public class TestHiveCommonClientConfig
                 .setZstdJniDecompressionEnabled(false)
                 .setParquetBatchReaderVerificationEnabled(false)
                 .setParquetBatchReadOptimizationEnabled(false)
-                .setReadNullMaskedParquetEncryptedValue(false));
+                .setReadNullMaskedParquetEncryptedValue(false)
+                .setCatalogName(null)
+                .setAffinitySchedulingFileSectionSize(new DataSize(256, MEGABYTE)));
     }
 
     @Test
@@ -72,6 +75,8 @@ public class TestHiveCommonClientConfig
                 .put("hive.enable-parquet-batch-reader-verification", "true")
                 .put("hive.parquet-batch-read-optimization-enabled", "true")
                 .put("hive.read-null-masked-parquet-encrypted-value-enabled", "true")
+                .put("hive.metastore.catalog.name", "catalogName")
+                .put("hive.affinity-scheduling-file-section-size", "512MB")
                 .build();
 
         HiveCommonClientConfig expected = new HiveCommonClientConfig()
@@ -92,7 +97,9 @@ public class TestHiveCommonClientConfig
                 .setZstdJniDecompressionEnabled(true)
                 .setParquetBatchReaderVerificationEnabled(true)
                 .setParquetBatchReadOptimizationEnabled(true)
-                .setReadNullMaskedParquetEncryptedValue(true);
+                .setReadNullMaskedParquetEncryptedValue(true)
+                .setCatalogName("catalogName")
+                .setAffinitySchedulingFileSectionSize(new DataSize(512, MEGABYTE));
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

@@ -42,7 +42,7 @@ public class QualifiedObjectName
 
         String[] parts = name.split("\\.");
         if (parts.length != 3) {
-            throw new IllegalArgumentException("QualifiedObjectName should have exactly 3 parts");
+            throw new IllegalArgumentException(format("QualifiedObjectName should have exactly 3 parts, found %s: %s", parts.length, name));
         }
 
         return new QualifiedObjectName(parts[0], parts[1], parts[2]);
@@ -62,8 +62,6 @@ public class QualifiedObjectName
     public QualifiedObjectName(String catalogName, String schemaName, String objectName)
     {
         checkLowerCase(catalogName, "catalogName");
-        checkLowerCase(schemaName, "schemaName");
-        checkLowerCase(objectName, "objectName");
         this.catalogName = catalogName;
         this.schemaName = schemaName;
         this.objectName = objectName;

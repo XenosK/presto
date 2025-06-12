@@ -25,7 +25,6 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import org.apache.iceberg.FileFormat;
 
 import java.util.Collections;
 import java.util.List;
@@ -45,11 +44,15 @@ public class IcebergSplit
     private final FileFormat fileFormat;
     private final List<HostAddress> addresses;
     private final Map<Integer, HivePartitionKey> partitionKeys;
+    private final String partitionSpecAsJson;
+    private final Optional<String> partitionDataJson;
     private final NodeSelectionStrategy nodeSelectionStrategy;
     private final SplitWeight splitWeight;
     private final List<DeleteFile> deletes;
     private final Optional<ChangelogSplitInfo> changelogSplitInfo;
     private final long dataSequenceNumber;
+    private final long affinitySchedulingFileSectionSize;
+    private final long affinitySchedulingFileSectionIndex;
 
     @JsonCreator
     public IcebergSplit(
@@ -59,11 +62,14 @@ public class IcebergSplit
             @JsonProperty("fileFormat") FileFormat fileFormat,
             @JsonProperty("addresses") List<HostAddress> addresses,
             @JsonProperty("partitionKeys") Map<Integer, HivePartitionKey> partitionKeys,
+            @JsonProperty("partitionSpecAsJson") String partitionSpecAsJson,
+            @JsonProperty("partitionDataJson") Optional<String> partitionDataJson,
             @JsonProperty("nodeSelectionStrategy") NodeSelectionStrategy nodeSelectionStrategy,
             @JsonProperty("splitWeight") SplitWeight splitWeight,
             @JsonProperty("deletes") List<DeleteFile> deletes,
             @JsonProperty("changelogSplitInfo") Optional<ChangelogSplitInfo> changelogSplitInfo,
-            @JsonProperty("dataSequenceNumber") long dataSequenceNumber)
+            @JsonProperty("dataSequenceNumber") long dataSequenceNumber,
+            @JsonProperty("affinitySchedulingSectionSize") long affinitySchedulingFileSectionSize)
     {
         requireNonNull(nodeSelectionStrategy, "nodeSelectionStrategy is null");
         this.path = requireNonNull(path, "path is null");
@@ -72,11 +78,15 @@ public class IcebergSplit
         this.fileFormat = requireNonNull(fileFormat, "fileFormat is null");
         this.addresses = ImmutableList.copyOf(requireNonNull(addresses, "addresses is null"));
         this.partitionKeys = Collections.unmodifiableMap(requireNonNull(partitionKeys, "partitionKeys is null"));
+        this.partitionSpecAsJson = requireNonNull(partitionSpecAsJson, "partitionSpecAsJson is null");
+        this.partitionDataJson = partitionDataJson;
         this.nodeSelectionStrategy = nodeSelectionStrategy;
         this.splitWeight = requireNonNull(splitWeight, "splitWeight is null");
         this.deletes = ImmutableList.copyOf(requireNonNull(deletes, "deletes is null"));
         this.changelogSplitInfo = requireNonNull(changelogSplitInfo, "changelogSplitInfo is null");
         this.dataSequenceNumber = dataSequenceNumber;
+        this.affinitySchedulingFileSectionSize = affinitySchedulingFileSectionSize;
+        this.affinitySchedulingFileSectionIndex = start / affinitySchedulingFileSectionSize;
     }
 
     @JsonProperty
@@ -116,6 +126,18 @@ public class IcebergSplit
     }
 
     @JsonProperty
+    public String getPartitionSpecAsJson()
+    {
+        return partitionSpecAsJson;
+    }
+
+    @JsonProperty
+    public Optional<String> getPartitionDataJson()
+    {
+        return partitionDataJson;
+    }
+
+    @JsonProperty
     @Override
     public NodeSelectionStrategy getNodeSelectionStrategy()
     {
@@ -126,7 +148,7 @@ public class IcebergSplit
     public List<HostAddress> getPreferredNodes(NodeProvider nodeProvider)
     {
         if (getNodeSelectionStrategy() == SOFT_AFFINITY) {
-            return nodeProvider.get(path, 2);
+            return nodeProvider.get(path + "#" + affinitySchedulingFileSectionIndex);
         }
         return addresses;
     }
@@ -154,6 +176,12 @@ public class IcebergSplit
     public long getDataSequenceNumber()
     {
         return dataSequenceNumber;
+    }
+
+    @JsonProperty
+    public long getAffinitySchedulingFileSectionSize()
+    {
+        return affinitySchedulingFileSectionSize;
     }
 
     @Override

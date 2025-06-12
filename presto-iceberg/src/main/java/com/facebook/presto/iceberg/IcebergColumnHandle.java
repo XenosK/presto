@@ -35,6 +35,7 @@ import static com.facebook.presto.iceberg.ColumnIdentity.createColumnIdentity;
 import static com.facebook.presto.iceberg.ColumnIdentity.primitiveColumnIdentity;
 import static com.facebook.presto.iceberg.IcebergMetadataColumn.DATA_SEQUENCE_NUMBER;
 import static com.facebook.presto.iceberg.IcebergMetadataColumn.FILE_PATH;
+import static com.facebook.presto.iceberg.IcebergMetadataColumn.UPDATE_ROW_DATA;
 import static com.facebook.presto.iceberg.TypeConverter.toPrestoType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
@@ -96,6 +97,12 @@ public class IcebergColumnHandle
         return columnIdentity.getId() == ROW_POSITION.fieldId();
     }
 
+    @JsonIgnore
+    public boolean isUpdateRowIdColumn()
+    {
+        return columnIdentity.getId() == UPDATE_ROW_DATA.getId();
+    }
+
     @Override
     public ColumnHandle withRequiredSubfields(List<Subfield> subfields)
     {
@@ -143,7 +150,7 @@ public class IcebergColumnHandle
     private static IcebergColumnHandle getIcebergColumnHandle(IcebergMetadataColumn metadataColumn)
     {
         return new IcebergColumnHandle(
-                columIdentity(metadataColumn),
+                columnIdentity(metadataColumn),
                 metadataColumn.getType(),
                 Optional.empty(),
                 SYNTHESIZED);
@@ -158,7 +165,7 @@ public class IcebergColumnHandle
                 .build();
     }
 
-    private static ColumnIdentity columIdentity(IcebergMetadataColumn metadata)
+    private static ColumnIdentity columnIdentity(IcebergMetadataColumn metadata)
     {
         return new ColumnIdentity(metadata.getId(), metadata.getColumnName(), metadata.getTypeCategory(), ImmutableList.of());
     }

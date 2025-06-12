@@ -28,6 +28,7 @@ import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.orc.StorageStripeMetadataSource;
 import com.facebook.presto.orc.StripeMetadataSourceFactory;
 import com.facebook.presto.orc.cache.StorageOrcFileTailSource;
+import com.facebook.presto.parquet.FileParquetDataSource;
 import com.facebook.presto.parquet.cache.MetadataReader;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
@@ -56,6 +57,11 @@ import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.VarcharTypeInfo;
 import org.apache.hadoop.mapred.FileSplit;
+import org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.apache.parquet.schema.LogicalTypeAnnotation;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.Type;
+import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -63,6 +69,7 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -70,6 +77,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.TimeZone;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
@@ -105,6 +113,7 @@ import static com.facebook.presto.tests.StructuralTestUtil.rowBlockOf;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.filter;
 import static io.airlift.slice.Slices.utf8Slice;
+import static java.io.File.createTempFile;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardListObjectInspector;
@@ -119,6 +128,7 @@ import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveO
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaStringObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaTimestampObjectInspector;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
@@ -329,7 +339,7 @@ public class TestHiveFileFormats
         assertThatFileFormat(ORC)
                 .withColumns(TEST_COLUMNS)
                 .withRowsCount(rowCount)
-                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
     }
 
     @Test(dataProvider = "rowCount")
@@ -352,7 +362,7 @@ public class TestHiveFileFormats
                 .withSession(session)
                 .withFileWriterFactory(new OrcFileWriterFactory(HDFS_ENVIRONMENT, new OutputStreamDataSinkFactory(), FUNCTION_AND_TYPE_MANAGER, new NodeVersion("test"), HIVE_STORAGE_TIME_ZONE, STATS, new OrcFileWriterConfig(), NO_ENCRYPTION))
                 .isReadableByRecordCursor(new GenericHiveRecordCursorProvider(HDFS_ENVIRONMENT))
-                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
     }
 
     @Test(dataProvider = "rowCount")
@@ -391,7 +401,34 @@ public class TestHiveFileFormats
                 .withRowsCount(rowCount)
                 .withReadColumns(Lists.reverse(TEST_COLUMNS))
                 .withSession(session)
-                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, true, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, true, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+    }
+
+    @Test(dataProvider = "rowCount")
+    public void testOrcUseColumnNamesCompatibility(int rowCount)
+            throws Exception
+    {
+        // test hive.orc.use-column-names can fallback to use hive column names, if in orc file has no real column names
+        // only have old hive style name _col1, _col2, _col3
+        TestingConnectorSession session = new TestingConnectorSession(getAllSessionProperties(
+                new HiveClientConfig(),
+                new HiveCommonClientConfig()));
+
+        assertThatFileFormat(ORC)
+                .withWriteColumns(getHiveColumnNameColumns())
+                .withRowsCount(rowCount)
+                .withReadColumns(TEST_COLUMNS)
+                .withSession(session)
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, true, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+    }
+
+    private static List<TestColumn> getHiveColumnNameColumns()
+    {
+        // Creates a new list of TestColumn objects with Hive-style column names based on their indices.
+        // Each column's name is replaced with "_col" followed by its index in the list.
+        return IntStream.range(0, TEST_COLUMNS.size())
+                .mapToObj(index -> TEST_COLUMNS.get(index).withName("_col" + index))
+                .collect(toList());
     }
 
     @Test(dataProvider = "rowCount")
@@ -470,6 +507,52 @@ public class TestHiveFileFormats
                 .isReadableByPageSource(new ParquetPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, HDFS_ENVIRONMENT, STATS, METADATA_READER));
     }
 
+    @Test
+    public void testParquetLogicalTypes() throws IOException
+    {
+        HiveFileWriterFactory parquetFileWriterFactory = new ParquetFileWriterFactory(HDFS_ENVIRONMENT, FUNCTION_AND_TYPE_MANAGER, new NodeVersion("test"), HIVE_STORAGE_TIME_ZONE);
+
+        List<PropertyMetadata<?>> allSessionProperties = getAllSessionProperties(
+                new HiveClientConfig(),
+                new ParquetFileWriterConfig().setParquetOptimizedWriterEnabled(true),
+                createOrcHiveCommonClientConfig(true, 100.0));
+
+        TestingConnectorSession session = new TestingConnectorSession(allSessionProperties);
+        File file = createTempFile("logicaltest", ".parquet");
+        long timestamp = new DateTime(2011, 5, 6, 7, 8, 9, 123).getMillis();
+
+        try {
+            createTestFile(
+                    file.getAbsolutePath(),
+                    PARQUET,
+                    HiveCompressionCodec.NONE,
+                    ImmutableList.of(new TestColumn("t_timestamp", javaTimestampObjectInspector, new Timestamp(timestamp), timestamp)),
+                    session,
+                    3,
+                    parquetFileWriterFactory);
+
+            FileParquetDataSource dataSource = new FileParquetDataSource(file);
+            ParquetMetadata parquetMetadata = MetadataReader.readFooter(
+                    dataSource,
+                    file.length(),
+                    Optional.empty(),
+                    false).getParquetMetadata();
+
+            MessageType writtenSchema = parquetMetadata.getFileMetaData().getSchema();
+            Type timestampType = writtenSchema.getType("t_timestamp");
+            if (timestampType.getLogicalTypeAnnotation() instanceof LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) {
+                LogicalTypeAnnotation.TimestampLogicalTypeAnnotation annotation = (LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) timestampType.getLogicalTypeAnnotation();
+                assertFalse(annotation.isAdjustedToUTC());
+            }
+            else {
+                fail("the logical type annotation saved was not of type TimestampLogicalTypeAnnotation");
+            }
+        }
+        finally {
+            file.delete();
+        }
+    }
+
     private static List<TestColumn> getTestColumnsSupportedByParquet()
     {
         // Write of complex hive data to Parquet is broken
@@ -545,7 +628,7 @@ public class TestHiveFileFormats
         assertThatFileFormat(ORC)
                 .withWriteColumns(ImmutableList.of(writeColumn))
                 .withReadColumns(ImmutableList.of(readColumn))
-                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
+                .isReadableByPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())));
 
         assertThatFileFormat(PARQUET)
                 .withWriteColumns(ImmutableList.of(writeColumn))
@@ -593,7 +676,7 @@ public class TestHiveFileFormats
 
         assertThatFileFormat(ORC)
                 .withColumns(columns)
-                .isFailingForPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, FUNCTION_RESOLUTION, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())), expectedErrorCode, expectedMessage);
+                .isFailingForPageSource(new OrcBatchPageSourceFactory(FUNCTION_AND_TYPE_MANAGER, false, HDFS_ENVIRONMENT, STATS, 100, new StorageOrcFileTailSource(), StripeMetadataSourceFactory.of(new StorageStripeMetadataSource())), expectedErrorCode, expectedMessage);
 
         assertThatFileFormat(PARQUET)
                 .withColumns(columns)
@@ -905,7 +988,8 @@ public class TestHiveFileFormats
                 split.getLength(),
                 Instant.now().toEpochMilli(),
                 Optional.empty(),
-                ImmutableMap.of());
+                ImmutableMap.of(),
+                0);
 
         Configuration configuration = new Configuration();
         configuration.set("io.compression.codecs", LzoCodec.class.getName() + "," + LzopCodec.class.getName());
@@ -941,6 +1025,7 @@ public class TestHiveFileFormats
                 TRUE_CONSTANT,
                 false,
                 ROW_EXPRESSION_SERVICE,
+                Optional.empty(),
                 Optional.empty());
 
         RecordCursor cursor = ((RecordPageSource) pageSource.get()).getCursor();
@@ -976,7 +1061,8 @@ public class TestHiveFileFormats
                 split.getLength(),
                 Instant.now().toEpochMilli(),
                 Optional.empty(),
-                ImmutableMap.of());
+                ImmutableMap.of(),
+                0);
 
         Optional<ConnectorPageSource> pageSource = HivePageSourceProvider.createHivePageSource(
                 ImmutableSet.of(),
@@ -1010,6 +1096,7 @@ public class TestHiveFileFormats
                 TRUE_CONSTANT,
                 false,
                 ROW_EXPRESSION_SERVICE,
+                Optional.empty(),
                 Optional.empty());
 
         assertTrue(pageSource.isPresent());

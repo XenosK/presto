@@ -124,7 +124,7 @@ public class TestSingleStoreIntegrationSmokeTest
         Map<String, String> properties = ImmutableMap.of("deprecated.legacy-char-to-varchar-coercion", "true");
         Map<String, String> connectorProperties = ImmutableMap.of("connection-url", singleStoreServer.getJdbcUrl());
 
-        try (QueryRunner queryRunner = new DistributedQueryRunner(getSession(), 3, properties);) {
+        try (QueryRunner queryRunner = new DistributedQueryRunner(getSession(), 3, properties)) {
             queryRunner.installPlugin(new SingleStorePlugin());
             queryRunner.createCatalog("singlestore", "singlestore", connectorProperties);
 
@@ -194,6 +194,13 @@ public class TestSingleStoreIntegrationSmokeTest
                 "VALUES (NULL, CAST('2012-12-31' AS DATE), 1), (CAST('2013-01-01' AS DATE), CAST('2013-01-02' AS DATE), 2)");
 
         assertUpdate("DROP TABLE test_insert_not_null");
+    }
+
+    @Test
+    public void testIgnoredSchemas()
+    {
+        MaterializedResult actual = computeActual("SHOW SCHEMAS");
+        assertFalse(actual.getMaterializedRows().stream().anyMatch(schemaResult -> schemaResult.getField(0).equals("memsql")));
     }
 
     @Test

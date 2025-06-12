@@ -31,11 +31,10 @@ import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.prerequisites.QueryPrerequisites;
 import com.facebook.presto.spi.prerequisites.QueryPrerequisitesContext;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupQueryLimits;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import org.joda.time.DateTime;
 
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -52,7 +51,6 @@ import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.USER_CANCELED;
 import static com.facebook.presto.util.Failures.toFailure;
 import static com.google.common.util.concurrent.Futures.nonCancellationPropagating;
-import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -185,21 +183,22 @@ public class LocalDispatchQuery
     public void startWaitingForResources()
     {
         if (stateMachine.transitionToWaitingForResources()) {
-            waitForMinimumWorkers();
+            waitForMinimumCoordinatorSidecarsAndWorkers();
         }
     }
 
-    private void waitForMinimumWorkers()
+    private void waitForMinimumCoordinatorSidecarsAndWorkers()
     {
-        ListenableFuture<?> minimumWorkerFuture = clusterSizeMonitor.waitForMinimumWorkers();
-        // when worker requirement is met, wait for query execution to finish construction and then start the execution
-        addSuccessCallback(minimumWorkerFuture, () -> {
+        ListenableFuture<?> minimumResourcesFuture = Futures.allAsList(
+                clusterSizeMonitor.waitForMinimumCoordinatorSidecars(),
+                clusterSizeMonitor.waitForMinimumWorkers());
+        // when worker and sidecar requirement is met, wait for query execution to finish construction and then start the execution
+        addSuccessCallback(minimumResourcesFuture, () -> {
             // It's the time to end waiting for resources
             boolean isDispatching = stateMachine.transitionToDispatching();
             addSuccessCallback(queryExecutionFuture, queryExecution -> startExecution(queryExecution, isDispatching));
         });
-
-        addExceptionCallback(minimumWorkerFuture, throwable -> queryExecutor.execute(() -> fail(throwable)));
+        addExceptionCallback(minimumResourcesFuture, throwable -> queryExecutor.execute(() -> fail(throwable)));
     }
 
     private void startExecution(QueryExecution queryExecution, boolean isDispatching)
@@ -230,9 +229,9 @@ public class LocalDispatchQuery
     }
 
     @Override
-    public DateTime getLastHeartbeat()
+    public long getLastHeartbeatInMillis()
     {
-        return stateMachine.getLastHeartbeat();
+        return stateMachine.getLastHeartbeatInMillis();
     }
 
     @Override
@@ -275,21 +274,21 @@ public class LocalDispatchQuery
     }
 
     @Override
-    public DateTime getCreateTime()
+    public long getCreateTimeInMillis()
     {
-        return stateMachine.getCreateTime();
+        return stateMachine.getCreateTimeInMillis();
     }
 
     @Override
-    public Optional<DateTime> getExecutionStartTime()
+    public long getExecutionStartTimeInMillis()
     {
-        return stateMachine.getExecutionStartTime();
+        return stateMachine.getExecutionStartTimeInMillis();
     }
 
     @Override
-    public Optional<DateTime> getEndTime()
+    public long getEndTimeInMillis()
     {
-        return stateMachine.getEndTime();
+        return stateMachine.getEndTimeInMillis();
     }
 
     @Override
@@ -297,23 +296,23 @@ public class LocalDispatchQuery
     {
         return tryGetQueryExecution()
                 .map(QueryExecution::getTotalCpuTime)
-                .orElse(new Duration(0, MILLISECONDS));
+                .orElseGet(() -> new Duration(0, MILLISECONDS));
     }
 
     @Override
-    public DataSize getTotalMemoryReservation()
+    public long getTotalMemoryReservationInBytes()
     {
         return tryGetQueryExecution()
-                .map(QueryExecution::getTotalMemoryReservation)
-                .orElse(new DataSize(0, BYTE));
+                .map(QueryExecution::getTotalMemoryReservationInBytes)
+                .orElse(0L);
     }
 
     @Override
-    public DataSize getUserMemoryReservation()
+    public long getUserMemoryReservationInBytes()
     {
         return tryGetQueryExecution()
-                .map(QueryExecution::getUserMemoryReservation)
-                .orElse(new DataSize(0, BYTE));
+                .map(QueryExecution::getUserMemoryReservationInBytes)
+                .orElse(0L);
     }
 
     public int getRunningTaskCount()
@@ -326,7 +325,7 @@ public class LocalDispatchQuery
     {
         return tryGetQueryExecution()
                 .map(QueryExecution::getBasicQueryInfo)
-                .orElse(stateMachine.getBasicQueryInfo(Optional.empty()));
+                .orElseGet(() -> stateMachine.getBasicQueryInfo(Optional.empty()));
     }
 
     @Override
@@ -355,9 +354,15 @@ public class LocalDispatchQuery
     }
 
     @Override
-    public void pruneInfo()
+    public void pruneExpiredQueryInfo()
     {
-        stateMachine.pruneQueryInfo();
+        stateMachine.pruneQueryInfoExpired();
+    }
+
+    @Override
+    public void pruneFinishedQueryInfo()
+    {
+        stateMachine.pruneQueryInfoFinished();
     }
 
     @Override

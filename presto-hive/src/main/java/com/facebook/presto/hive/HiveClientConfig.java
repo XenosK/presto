@@ -30,7 +30,6 @@ import org.joda.time.DateTimeZone;
 
 import javax.validation.constraints.DecimalMax;
 import javax.validation.constraints.DecimalMin;
-import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
@@ -39,6 +38,7 @@ import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.hive.BucketFunctionType.HIVE_COMPATIBLE;
+import static com.facebook.presto.hive.BucketFunctionType.PRESTO_NATIVE;
 import static com.facebook.presto.hive.HiveClientConfig.InsertExistingPartitionsBehavior.APPEND;
 import static com.facebook.presto.hive.HiveClientConfig.InsertExistingPartitionsBehavior.ERROR;
 import static com.facebook.presto.hive.HiveClientConfig.InsertExistingPartitionsBehavior.OVERWRITE;
@@ -46,6 +46,7 @@ import static com.facebook.presto.hive.HiveSessionProperties.INSERT_EXISTING_PAR
 import static com.facebook.presto.hive.HiveStorageFormat.ORC;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -121,6 +122,8 @@ public class HiveClientConfig
     private boolean bucketExecutionEnabled = true;
     private boolean sortedWritingEnabled = true;
     private BucketFunctionType bucketFunctionTypeForExchange = HIVE_COMPATIBLE;
+
+    private BucketFunctionType bucketFunctionTypeForCteMaterialization = PRESTO_NATIVE;
     private boolean ignoreTableBucketing;
     private boolean ignoreUnreadablePartition;
     private int minBucketCountToNotIgnoreTableBucketing;
@@ -152,13 +155,15 @@ public class HiveClientConfig
     private HiveStorageFormat temporaryTableStorageFormat = ORC;
     private HiveCompressionCodec temporaryTableCompressionCodec = HiveCompressionCodec.SNAPPY;
     private boolean shouldCreateEmptyBucketFilesForTemporaryTable;
+
+    private int cteVirtualBucketCount = 128;
     private boolean usePageFileForHiveUnsupportedType = true;
 
     private boolean pushdownFilterEnabled;
     private boolean parquetPushdownFilterEnabled;
     private boolean adaptiveFilterReorderingEnabled = true;
     private Duration fileStatusCacheExpireAfterWrite = new Duration(0, TimeUnit.SECONDS);
-    private long fileStatusCacheMaxSize;
+    private DataSize fileStatusCacheMaxRetainedSize = new DataSize(0, KILOBYTE);
     private List<String> fileStatusCacheTables = ImmutableList.of();
 
     private DataSize pageFileStripeMaxSize = new DataSize(24, MEGABYTE);
@@ -184,9 +189,11 @@ public class HiveClientConfig
     private boolean verboseRuntimeStatsEnabled;
     private boolean useRecordPageSourceForCustomSplit = true;
     private boolean hudiMetadataEnabled;
+    private String hudiTablesUseMergedView;
 
     private boolean sizeBasedSplitWeightsEnabled = true;
     private double minimumAssignedSplitWeight = 0.05;
+    private boolean dynamicSplitSizesEnabled;
 
     private boolean userDefinedTypeEncodingEnabled;
 
@@ -199,8 +206,24 @@ public class HiveClientConfig
 
     private boolean partitionFilteringFromMetastoreEnabled = true;
 
+    private boolean skipEmptyFiles;
+
     private boolean parallelParsingOfPartitionValuesEnabled;
     private int maxParallelParsingConcurrency = 100;
+    private boolean quickStatsEnabled;
+    // Duration the initiator query of the quick stats fetch for a partition should wait for stats to be built, before failing and returning EMPTY PartitionStats
+    private Duration quickStatsInlineBuildTimeout = new Duration(60, TimeUnit.SECONDS);
+    // If an in-progress background build is already observed for a partition, this duration is what the current query will wait for the background build to finish
+    // before giving up and returning EMPTY stats
+    private Duration quickStatsBackgroundBuildTimeout = new Duration(0, TimeUnit.SECONDS);
+    private Duration quickStatsCacheExpiry = new Duration(24, TimeUnit.HOURS);
+    private Duration quickStatsInProgressReaperExpiry = new Duration(5, TimeUnit.MINUTES);
+    private Duration parquetQuickStatsFileMetadataFetchTimeout = new Duration(60, TimeUnit.SECONDS);
+    private int parquetQuickStatsMaxConcurrentCalls = 500;
+    private int quickStatsMaxConcurrentCalls = 100;
+    private boolean legacyTimestampBucketing;
+    private boolean optimizeParsingOfPartitionValues;
+    private int optimizeParsingOfPartitionValuesThreshold = 500;
 
     @Min(0)
     public int getMaxInitialSplits()
@@ -254,20 +277,6 @@ public class HiveClientConfig
     public HiveClientConfig setDomainCompactionThreshold(int domainCompactionThreshold)
     {
         this.domainCompactionThreshold = domainCompactionThreshold;
-        return this;
-    }
-
-    @MinDataSize("1MB")
-    @MaxDataSize("1GB")
-    public DataSize getWriterSortBufferSize()
-    {
-        return writerSortBufferSize;
-    }
-
-    @Config("hive.writer-sort-buffer-size")
-    public HiveClientConfig setWriterSortBufferSize(DataSize writerSortBufferSize)
-    {
-        this.writerSortBufferSize = writerSortBufferSize;
         return this;
     }
 
@@ -673,22 +682,6 @@ public class HiveClientConfig
         this.maxPartitionsPerWriter = maxPartitionsPerWriter;
         return this;
     }
-
-    @Min(2)
-    @Max(1000)
-    public int getMaxOpenSortFiles()
-    {
-        return maxOpenSortFiles;
-    }
-
-    @Config("hive.max-open-sort-files")
-    @ConfigDescription("Maximum number of writer temporary files to read in one pass")
-    public HiveClientConfig setMaxOpenSortFiles(int maxOpenSortFiles)
-    {
-        this.maxOpenSortFiles = maxOpenSortFiles;
-        return this;
-    }
-
     public int getWriteValidationThreads()
     {
         return writeValidationThreads;
@@ -734,7 +727,7 @@ public class HiveClientConfig
     }
 
     @Config("hive.orc.use-column-names")
-    @ConfigDescription("Access ORC columns using names from the file")
+    @ConfigDescription("Access ORC columns using names from the file first, and fallback to Hive schema column names if not found to ensure backward compatibility with old data")
     public HiveClientConfig setUseOrcColumnNames(boolean useOrcColumnNames)
     {
         this.useOrcColumnNames = useOrcColumnNames;
@@ -836,15 +829,15 @@ public class HiveClientConfig
         return this;
     }
 
-    public long getFileStatusCacheMaxSize()
+    public DataSize getFileStatusCacheMaxRetainedSize()
     {
-        return fileStatusCacheMaxSize;
+        return fileStatusCacheMaxRetainedSize;
     }
 
-    @Config("hive.file-status-cache-size")
-    public HiveClientConfig setFileStatusCacheMaxSize(long fileStatusCacheMaxSize)
+    @Config("hive.file-status-cache.max-retained-size")
+    public HiveClientConfig setFileStatusCacheMaxRetainedSize(DataSize fileStatusCacheMaxRetainedSize)
     {
-        this.fileStatusCacheMaxSize = fileStatusCacheMaxSize;
+        this.fileStatusCacheMaxRetainedSize = fileStatusCacheMaxRetainedSize;
         return this;
     }
 
@@ -969,6 +962,19 @@ public class HiveClientConfig
     public BucketFunctionType getBucketFunctionTypeForExchange()
     {
         return bucketFunctionTypeForExchange;
+    }
+
+    @Config("hive.bucket-function-type-for-cte-materialization")
+    @ConfigDescription("Hash function type for cte materialization")
+    public HiveClientConfig setBucketFunctionTypeForCteMaterialization(BucketFunctionType bucketFunctionTypeForCteMaterialization)
+    {
+        this.bucketFunctionTypeForCteMaterialization = bucketFunctionTypeForCteMaterialization;
+        return this;
+    }
+
+    public BucketFunctionType getBucketFunctionTypeForCteMaterialization()
+    {
+        return bucketFunctionTypeForCteMaterialization;
     }
 
     @Config("hive.ignore-unreadable-partition")
@@ -1305,6 +1311,20 @@ public class HiveClientConfig
         return parquetPushdownFilterEnabled;
     }
 
+    @Config("hive.cte-virtual-bucket-count")
+    @ConfigDescription("Number of buckets allocated per materialized CTE. (Recommended value: 4 - 10x times the size of the cluster)")
+    public HiveClientConfig setCteVirtualBucketCount(int cteVirtualBucketCount)
+    {
+        this.cteVirtualBucketCount = cteVirtualBucketCount;
+        return this;
+    }
+
+    @NotNull
+    public int getCteVirtualBucketCount()
+    {
+        return cteVirtualBucketCount;
+    }
+
     @Config("hive.parquet.pushdown-filter-enabled")
     @ConfigDescription("Experimental: enable complex filter pushdown for Parquet")
     public HiveClientConfig setParquetPushdownFilterEnabled(boolean parquetPushdownFilterEnabled)
@@ -1532,6 +1552,18 @@ public class HiveClientConfig
         return sizeBasedSplitWeightsEnabled;
     }
 
+    @Config("hive.dynamic-split-sizes-enabled")
+    public HiveClientConfig setDynamicSplitSizesEnabled(boolean dynamicSplitSizesEnabled)
+    {
+        this.dynamicSplitSizesEnabled = dynamicSplitSizesEnabled;
+        return this;
+    }
+
+    public boolean isDynamicSplitSizesEnabled()
+    {
+        return dynamicSplitSizesEnabled;
+    }
+
     @Config("hive.minimum-assigned-split-weight")
     @ConfigDescription("Minimum weight that a split can be assigned when size based split weights are enabled")
     public HiveClientConfig setMinimumAssignedSplitWeight(double minimumAssignedSplitWeight)
@@ -1584,6 +1616,118 @@ public class HiveClientConfig
     public boolean isHudiMetadataEnabled()
     {
         return this.hudiMetadataEnabled;
+    }
+
+    @Config("hive.hudi-tables-use-merged-view")
+    @ConfigDescription("For Hudi tables, a comma-separated list in the form of <schema>.<table> which should prefer to fetch the list of files from the merged file system view")
+    public HiveClientConfig setHudiTablesUseMergedView(String hudiTablesUseMergedView)
+    {
+        this.hudiTablesUseMergedView = hudiTablesUseMergedView;
+        return this;
+    }
+
+    public String getHudiTablesUseMergedView()
+    {
+        return this.hudiTablesUseMergedView;
+    }
+
+    @Config("hive.quick-stats.enabled")
+    @ConfigDescription("Use quick stats to resolve stats")
+    public HiveClientConfig setQuickStatsEnabled(boolean quickStatsEnabled)
+    {
+        this.quickStatsEnabled = quickStatsEnabled;
+        return this;
+    }
+
+    public boolean isQuickStatsEnabled()
+    {
+        return this.quickStatsEnabled;
+    }
+
+    @Config("hive.quick-stats.inline-build-timeout")
+    public HiveClientConfig setQuickStatsInlineBuildTimeout(Duration buildTimeout)
+    {
+        this.quickStatsInlineBuildTimeout = buildTimeout;
+        return this;
+    }
+
+    public Duration getQuickStatsInlineBuildTimeout()
+    {
+        return this.quickStatsInlineBuildTimeout;
+    }
+
+    @Config("hive.quick-stats.background-build-timeout")
+    public HiveClientConfig setQuickStatsBackgroundBuildTimeout(Duration buildTimeout)
+    {
+        this.quickStatsBackgroundBuildTimeout = buildTimeout;
+        return this;
+    }
+
+    public Duration getQuickStatsBackgroundBuildTimeout()
+    {
+        return this.quickStatsBackgroundBuildTimeout;
+    }
+
+    @Config("hive.quick-stats.cache-expiry")
+    public HiveClientConfig setQuickStatsCacheExpiry(Duration cacheExpiry)
+    {
+        this.quickStatsCacheExpiry = cacheExpiry;
+        return this;
+    }
+
+    public Duration getQuickStatsCacheExpiry()
+    {
+        return this.quickStatsCacheExpiry;
+    }
+
+    @Config("hive.quick-stats.reaper-expiry")
+    public HiveClientConfig setQuickStatsReaperExpiry(Duration reaperExpiry)
+    {
+        this.quickStatsInProgressReaperExpiry = reaperExpiry;
+        return this;
+    }
+
+    public Duration getQuickStatsReaperExpiry()
+    {
+        return this.quickStatsInProgressReaperExpiry;
+    }
+
+    @Config("hive.quick-stats.parquet.file-metadata-fetch-timeout")
+    public HiveClientConfig setParquetQuickStatsFileMetadataFetchTimeout(Duration fileMetadataFetchTimeout)
+    {
+        this.parquetQuickStatsFileMetadataFetchTimeout = fileMetadataFetchTimeout;
+        return this;
+    }
+
+    public Duration getParquetQuickStatsFileMetadataFetchTimeout()
+    {
+        return this.parquetQuickStatsFileMetadataFetchTimeout;
+    }
+
+    @Min(1)
+    public int getMaxConcurrentParquetQuickStatsCalls()
+    {
+        return parquetQuickStatsMaxConcurrentCalls;
+    }
+
+    @Config("hive.quick-stats.parquet.max-concurrent-calls")
+    public HiveClientConfig setMaxConcurrentParquetQuickStatsCalls(int maxConcurrentCalls)
+    {
+        this.parquetQuickStatsMaxConcurrentCalls = maxConcurrentCalls;
+        return this;
+    }
+
+    @Min(1)
+    public int getMaxConcurrentQuickStatsCalls()
+    {
+        return quickStatsMaxConcurrentCalls;
+    }
+
+    @Config("hive.quick-stats.max-concurrent-calls")
+    public HiveClientConfig setMaxConcurrentQuickStatsCalls(int maxConcurrentFooterFetchCalls)
+    {
+        this.quickStatsMaxConcurrentCalls = maxConcurrentFooterFetchCalls;
+        return this;
     }
 
     public Protocol getThriftProtocol()
@@ -1662,5 +1806,58 @@ public class HiveClientConfig
     public int getMaxParallelParsingConcurrency()
     {
         return this.maxParallelParsingConcurrency;
+    }
+
+    @Config("hive.skip-empty-files")
+    @ConfigDescription("Enables skip of empty files avoiding output error")
+    public HiveClientConfig setSkipEmptyFilesEnabled(boolean skipEmptyFiles)
+    {
+        this.skipEmptyFiles = skipEmptyFiles;
+        return this;
+    }
+
+    public boolean isSkipEmptyFilesEnabled()
+    {
+        return this.skipEmptyFiles;
+    }
+
+    public boolean isLegacyTimestampBucketing()
+    {
+        return legacyTimestampBucketing;
+    }
+
+    @Config("hive.legacy-timestamp-bucketing")
+    @ConfigDescription("Use legacy timestamp bucketing algorithm (which is not Hive compatible) for table bucketed by timestamp type.")
+    public HiveClientConfig setLegacyTimestampBucketing(boolean legacyTimestampBucketing)
+    {
+        this.legacyTimestampBucketing = legacyTimestampBucketing;
+        return this;
+    }
+
+    @Config("hive.optimize-parsing-of-partition-values-enabled")
+    @ConfigDescription("Enables optimization of parsing partition values when number of candidate partitions is large")
+    public HiveClientConfig setOptimizeParsingOfPartitionValues(boolean optimizeParsingOfPartitionValues)
+    {
+        this.optimizeParsingOfPartitionValues = optimizeParsingOfPartitionValues;
+        return this;
+    }
+
+    public boolean isOptimizeParsingOfPartitionValues()
+    {
+        return optimizeParsingOfPartitionValues;
+    }
+
+    @Config("hive.optimize-parsing-of-partition-values-threshold")
+    @ConfigDescription("Enables optimization of parsing partition values when number of candidate partitions exceed the threshold set here")
+    public HiveClientConfig setOptimizeParsingOfPartitionValuesThreshold(int optimizeParsingOfPartitionValuesThreshold)
+    {
+        this.optimizeParsingOfPartitionValuesThreshold = optimizeParsingOfPartitionValuesThreshold;
+        return this;
+    }
+
+    @Min(1)
+    public int getOptimizeParsingOfPartitionValuesThreshold()
+    {
+        return optimizeParsingOfPartitionValuesThreshold;
     }
 }

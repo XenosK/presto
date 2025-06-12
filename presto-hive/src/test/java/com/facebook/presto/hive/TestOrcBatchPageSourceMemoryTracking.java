@@ -107,7 +107,6 @@ import static com.facebook.presto.hive.BaseHiveColumnHandle.ColumnType.PARTITION
 import static com.facebook.presto.hive.BaseHiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveFileContext.DEFAULT_HIVE_FILE_CONTEXT;
 import static com.facebook.presto.hive.HiveTestUtils.FUNCTION_AND_TYPE_MANAGER;
-import static com.facebook.presto.hive.HiveTestUtils.FUNCTION_RESOLUTION;
 import static com.facebook.presto.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static com.facebook.presto.hive.HiveTestUtils.ROW_EXPRESSION_SERVICE;
 import static com.facebook.presto.hive.HiveTestUtils.SESSION;
@@ -452,11 +451,11 @@ public class TestOrcBatchPageSourceMemoryTracking
                     fileSplit.getLength(),
                     Instant.now().toEpochMilli(),
                     Optional.empty(),
-                    ImmutableMap.of());
+                    ImmutableMap.of(),
+                    0);
 
             OrcBatchPageSourceFactory orcPageSourceFactory = new OrcBatchPageSourceFactory(
                     FUNCTION_AND_TYPE_MANAGER,
-                    FUNCTION_RESOLUTION,
                     false,
                     HDFS_ENVIRONMENT,
                     stats,
@@ -489,6 +488,7 @@ public class TestOrcBatchPageSourceMemoryTracking
                     null,
                     false,
                     ROW_EXPRESSION_SERVICE,
+                    Optional.empty(),
                     Optional.empty())
                     .get();
         }
@@ -499,7 +499,7 @@ public class TestOrcBatchPageSourceMemoryTracking
             SourceOperatorFactory sourceOperatorFactory = new TableScanOperatorFactory(
                     0,
                     new PlanNodeId("0"),
-                    (session, split, table, columnHandles) -> pageSource,
+                    (session, split, table, columnHandles, runtimeStats) -> pageSource,
                     table,
                     columns.stream().map(columnHandle -> (ColumnHandle) columnHandle).collect(toList()));
             SourceOperator operator = sourceOperatorFactory.createOperator(driverContext);
@@ -524,7 +524,7 @@ public class TestOrcBatchPageSourceMemoryTracking
                     0,
                     new PlanNodeId("test"),
                     new PlanNodeId("0"),
-                    (session, split, table, columnHandles) -> pageSource,
+                    (session, split, table, columnHandles, runtimeStats) -> pageSource,
                     cursorProcessor,
                     pageProcessor,
                     table,

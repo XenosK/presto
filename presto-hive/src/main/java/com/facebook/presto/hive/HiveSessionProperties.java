@@ -95,11 +95,13 @@ public final class HiveSessionProperties
     public static final String PARQUET_PUSHDOWN_FILTER_ENABLED = "parquet_pushdown_filter_enabled";
     public static final String ADAPTIVE_FILTER_REORDERING_ENABLED = "adaptive_filter_reordering_enabled";
     public static final String VIRTUAL_BUCKET_COUNT = "virtual_bucket_count";
+    public static final String CTE_VIRTUAL_BUCKET_COUNT = "cte_virtual_bucket_count";
     public static final String MAX_BUCKETS_FOR_GROUPED_EXECUTION = "max_buckets_for_grouped_execution";
     public static final String OFFLINE_DATA_DEBUG_MODE_ENABLED = "offline_data_debug_mode_enabled";
     public static final String FAIL_FAST_ON_INSERT_INTO_IMMUTABLE_PARTITIONS_ENABLED = "fail_fast_on_insert_into_immutable_partitions_enabled";
     public static final String USE_LIST_DIRECTORY_CACHE = "use_list_directory_cache";
     private static final String BUCKET_FUNCTION_TYPE_FOR_EXCHANGE = "bucket_function_type_for_exchange";
+    private static final String BUCKET_FUNCTION_TYPE_FOR_CTE_MATERIALIZATON = "bucket_function_type_for_cte_materialization";
     public static final String PARQUET_DEREFERENCE_PUSHDOWN_ENABLED = "parquet_dereference_pushdown_enabled";
     public static final String IGNORE_UNREADABLE_PARTITION = "ignore_unreadable_partition";
     public static final String PARTIAL_AGGREGATION_PUSHDOWN_ENABLED = "partial_aggregation_pushdown_enabled";
@@ -123,8 +125,20 @@ public final class HiveSessionProperties
     public static final String MAX_INITIAL_SPLITS = "max_initial_splits";
     public static final String FILE_SPLITTABLE = "file_splittable";
     private static final String HUDI_METADATA_ENABLED = "hudi_metadata_enabled";
+    private static final String HUDI_TABLES_USE_MERGED_VIEW = "hudi_tables_use_merged_view";
     private static final String READ_TABLE_CONSTRAINTS = "read_table_constraints";
     public static final String PARALLEL_PARSING_OF_PARTITION_VALUES_ENABLED = "parallel_parsing_of_partition_values_enabled";
+    public static final String QUICK_STATS_ENABLED = "quick_stats_enabled";
+    public static final String QUICK_STATS_INLINE_BUILD_TIMEOUT = "quick_stats_inline_build_timeout";
+    public static final String QUICK_STATS_BACKGROUND_BUILD_TIMEOUT = "quick_stats_background_build_timeout";
+    public static final String DYNAMIC_SPLIT_SIZES_ENABLED = "dynamic_split_sizes_enabled";
+    public static final String SKIP_EMPTY_FILES = "skip_empty_files";
+    public static final String LEGACY_TIMESTAMP_BUCKETING = "legacy_timestamp_bucketing";
+    public static final String OPTIMIZE_PARSING_OF_PARTITION_VALUES = "optimize_parsing_of_partition_values";
+    public static final String OPTIMIZE_PARSING_OF_PARTITION_VALUES_THRESHOLD = "optimize_parsing_of_partition_values_threshold";
+
+    public static final String NATIVE_STATS_BASED_FILTER_REORDER_DISABLED = "native_stats_based_filter_reorder_disabled";
+
     private final List<PropertyMetadata<?>> sessionProperties;
 
     @Inject
@@ -393,6 +407,11 @@ public final class HiveSessionProperties
                         0,
                         false),
                 integerProperty(
+                        CTE_VIRTUAL_BUCKET_COUNT,
+                        "Number of virtual bucket assigned for bucketed cte materialization temporary tables",
+                        hiveClientConfig.getCteVirtualBucketCount(),
+                        false),
+                integerProperty(
                         MAX_BUCKETS_FOR_GROUPED_EXECUTION,
                         "maximum total buckets to allow using grouped execution",
                         hiveClientConfig.getMaxBucketsForGroupedExecution(),
@@ -442,6 +461,15 @@ public final class HiveSessionProperties
                         VARCHAR,
                         BucketFunctionType.class,
                         hiveClientConfig.getBucketFunctionTypeForExchange(),
+                        false,
+                        value -> BucketFunctionType.valueOf((String) value),
+                        BucketFunctionType::toString),
+                new PropertyMetadata<>(
+                        BUCKET_FUNCTION_TYPE_FOR_CTE_MATERIALIZATON,
+                        "hash function type for bucketed table for cte materialization",
+                        VARCHAR,
+                        BucketFunctionType.class,
+                        hiveClientConfig.getBucketFunctionTypeForCteMaterialization(),
                         false,
                         value -> BucketFunctionType.valueOf((String) value),
                         BucketFunctionType::toString),
@@ -544,6 +572,11 @@ public final class HiveSessionProperties
                         "Enable estimating split weights based on size in bytes",
                         hiveClientConfig.isSizeBasedSplitWeightsEnabled(),
                         false),
+                booleanProperty(
+                        DYNAMIC_SPLIT_SIZES_ENABLED,
+                        "Enable dynamic sizing of splits based on column statistics",
+                        hiveClientConfig.isDynamicSplitSizesEnabled(),
+                        false),
                 new PropertyMetadata<>(
                         MINIMUM_ASSIGNED_SPLIT_WEIGHT,
                         "Minimum assigned split weight when size based split weighting is enabled",
@@ -579,11 +612,66 @@ public final class HiveSessionProperties
                         "For Hudi tables prefer to fetch the list of file names, sizes and other metadata from the internal metadata table rather than storage",
                         hiveClientConfig.isHudiMetadataEnabled(),
                         false),
+                stringProperty(
+                        HUDI_TABLES_USE_MERGED_VIEW,
+                        "For Hudi tables, a comma-separated list in the form of <schema>.<table> which should use merged view to read data",
+                        hiveClientConfig.getHudiTablesUseMergedView(),
+                        false),
                 booleanProperty(
                         PARALLEL_PARSING_OF_PARTITION_VALUES_ENABLED,
                         "Enables parallel parsing of partition values from partition names using thread pool",
                         hiveClientConfig.isParallelParsingOfPartitionValuesEnabled(),
-                        false));
+                        false),
+                booleanProperty(
+                        QUICK_STATS_ENABLED,
+                        "Use quick stats to resolve stats",
+                        hiveClientConfig.isQuickStatsEnabled(),
+                        false),
+                new PropertyMetadata<>(
+                        QUICK_STATS_INLINE_BUILD_TIMEOUT,
+                        "Duration that the first query that initiated a quick stats call should wait before failing and returning EMPTY stats. " +
+                                "If set to 0, quick stats builds are pushed to the background, and EMPTY stats are returned",
+                        VARCHAR,
+                        Duration.class,
+                        hiveClientConfig.getQuickStatsInlineBuildTimeout(),
+                        false,
+                        value -> Duration.valueOf((String) value),
+                        Duration::toString),
+                new PropertyMetadata<>(
+                        QUICK_STATS_BACKGROUND_BUILD_TIMEOUT,
+                        "If a quick stats build is already in-progress by another query, this property controls the duration the current query should wait " +
+                                "for the in-progress build to finish, before failing and returning EMPTY stats. If set to 0, EMTPY stats are returned whenever an " +
+                                "in-progress build is observed",
+                        VARCHAR,
+                        Duration.class,
+                        hiveClientConfig.getQuickStatsBackgroundBuildTimeout(),
+                        false,
+                        value -> Duration.valueOf((String) value),
+                        Duration::toString),
+                booleanProperty(
+                        SKIP_EMPTY_FILES,
+                        "If it is required empty files will be skipped",
+                        hiveClientConfig.isSkipEmptyFilesEnabled(),
+                        false),
+                booleanProperty(
+                        LEGACY_TIMESTAMP_BUCKETING,
+                        "Use legacy timestamp bucketing algorithm (which is not Hive compatible) for table bucketed by timestamp type.",
+                        hiveClientConfig.isLegacyTimestampBucketing(),
+                        false),
+                booleanProperty(
+                        OPTIMIZE_PARSING_OF_PARTITION_VALUES,
+                        "Optimize partition values parsing when number of candidates are large",
+                        hiveClientConfig.isOptimizeParsingOfPartitionValues(),
+                        false),
+                integerProperty(OPTIMIZE_PARSING_OF_PARTITION_VALUES_THRESHOLD,
+                        "When OPTIMIZE_PARSING_OF_PARTITION_VALUES is set to true, enable this optimizations when number of partitions exceed the threshold here",
+                        hiveClientConfig.getOptimizeParsingOfPartitionValuesThreshold(),
+                        false),
+                booleanProperty(
+                        NATIVE_STATS_BASED_FILTER_REORDER_DISABLED,
+                        "Native Execution only. Disable stats based filter reordering.",
+                        false,
+                        true));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -849,6 +937,15 @@ public final class HiveSessionProperties
         return virtualBucketCount;
     }
 
+    public static int getCteVirtualBucketCount(ConnectorSession session)
+    {
+        int virtualBucketCount = session.getProperty(CTE_VIRTUAL_BUCKET_COUNT, Integer.class);
+        if (virtualBucketCount < 0) {
+            throw new PrestoException(INVALID_SESSION_PROPERTY, format("%s must not be negative: %s", CTE_VIRTUAL_BUCKET_COUNT, virtualBucketCount));
+        }
+        return virtualBucketCount;
+    }
+
     public static boolean isOfflineDataDebugModeEnabled(ConnectorSession session)
     {
         return session.getProperty(OFFLINE_DATA_DEBUG_MODE_ENABLED, Boolean.class);
@@ -900,6 +997,11 @@ public final class HiveSessionProperties
     public static BucketFunctionType getBucketFunctionTypeForExchange(ConnectorSession session)
     {
         return session.getProperty(BUCKET_FUNCTION_TYPE_FOR_EXCHANGE, BucketFunctionType.class);
+    }
+
+    public static BucketFunctionType getBucketFunctionTypeForCteMaterialization(ConnectorSession session)
+    {
+        return session.getProperty(BUCKET_FUNCTION_TYPE_FOR_CTE_MATERIALIZATON, BucketFunctionType.class);
     }
 
     public static boolean isParquetDereferencePushdownEnabled(ConnectorSession session)
@@ -987,6 +1089,11 @@ public final class HiveSessionProperties
         return session.getProperty(SIZE_BASED_SPLIT_WEIGHTS_ENABLED, Boolean.class);
     }
 
+    public static boolean isDynamicSplitSizesEnabled(ConnectorSession session)
+    {
+        return session.getProperty(DYNAMIC_SPLIT_SIZES_ENABLED, Boolean.class);
+    }
+
     public static double getMinimumAssignedSplitWeight(ConnectorSession session)
     {
         return session.getProperty(MINIMUM_ASSIGNED_SPLIT_WEIGHT, Double.class);
@@ -1012,6 +1119,12 @@ public final class HiveSessionProperties
         return session.getProperty(HUDI_METADATA_ENABLED, Boolean.class);
     }
 
+    public static String getHudiTablesUseMergedView(ConnectorSession session)
+    {
+        String hudiTablesUseMergedView = session.getProperty(HUDI_TABLES_USE_MERGED_VIEW, String.class);
+        return hudiTablesUseMergedView == null ? "" : hudiTablesUseMergedView;
+    }
+
     public static boolean isReadTableConstraints(ConnectorSession session)
     {
         return session.getProperty(READ_TABLE_CONSTRAINTS, Boolean.class);
@@ -1020,5 +1133,40 @@ public final class HiveSessionProperties
     public static boolean isParallelParsingOfPartitionValuesEnabled(ConnectorSession session)
     {
         return session.getProperty(PARALLEL_PARSING_OF_PARTITION_VALUES_ENABLED, Boolean.class);
+    }
+
+    public static boolean isQuickStatsEnabled(ConnectorSession session)
+    {
+        return session.getProperty(QUICK_STATS_ENABLED, Boolean.class);
+    }
+
+    public static Duration getQuickStatsInlineBuildTimeout(ConnectorSession session)
+    {
+        return session.getProperty(QUICK_STATS_INLINE_BUILD_TIMEOUT, Duration.class);
+    }
+
+    public static Duration getQuickStatsBackgroundBuildTimeout(ConnectorSession session)
+    {
+        return session.getProperty(QUICK_STATS_BACKGROUND_BUILD_TIMEOUT, Duration.class);
+    }
+
+    public static boolean isSkipEmptyFilesEnabled(ConnectorSession session)
+    {
+        return session.getProperty(SKIP_EMPTY_FILES, Boolean.class);
+    }
+
+    public static boolean isLegacyTimestampBucketing(ConnectorSession session)
+    {
+        return session.getProperty(LEGACY_TIMESTAMP_BUCKETING, Boolean.class);
+    }
+
+    public static boolean isOptimizeParsingOfPartitionValues(ConnectorSession session)
+    {
+        return session.getProperty(OPTIMIZE_PARSING_OF_PARTITION_VALUES, Boolean.class);
+    }
+
+    public static int getOptimizeParsingOfPartitionValuesThreshold(ConnectorSession session)
+    {
+        return session.getProperty(OPTIMIZE_PARSING_OF_PARTITION_VALUES_THRESHOLD, Integer.class);
     }
 }
