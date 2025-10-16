@@ -13,46 +13,42 @@
  */
 package com.facebook.presto.router.scheduler;
 
-import com.facebook.airlift.json.JsonCodec;
 import com.facebook.airlift.log.Logging;
-import com.facebook.presto.client.QueryError;
-import com.facebook.presto.client.QueryResults;
-import com.facebook.presto.common.ErrorType;
 import com.facebook.presto.nativeworker.PrestoNativeQueryRunnerUtils;
 import com.facebook.presto.server.MockHttpServletRequest;
-import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.router.RouterRequestInfo;
 import com.facebook.presto.spi.router.Scheduler;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.AbstractTestQueryFramework;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.google.common.collect.ImmutableListMultimap;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ListMultimap;
+import jakarta.servlet.http.HttpServletRequest;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.net.URI;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.airlift.json.JsonCodec.jsonCodec;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_TIME_ZONE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_USER;
-import static com.facebook.presto.common.ErrorType.USER_ERROR;
 import static com.facebook.presto.nativeworker.NativeQueryRunnerUtils.createLineitem;
 import static com.facebook.presto.nativeworker.NativeQueryRunnerUtils.createRegion;
 import static com.facebook.presto.sidecar.NativeSidecarPluginQueryRunnerUtils.setupNativeSidecarPlugin;
 import static java.util.Collections.emptyList;
+import static java.util.Collections.list;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
 public class TestPlanCheckerRouterPlugin
         extends AbstractTestQueryFramework
 {
-    private static final JsonCodec<QueryResults> QUERY_RESULTS_CODEC = jsonCodec(QueryResults.class);
     private PlanCheckerRouterPluginConfig planCheckerRouterConfig;
 
     @BeforeClass
@@ -106,8 +102,9 @@ public class TestPlanCheckerRouterPlugin
     @Test
     public void testPlanCheckerPluginWithNativeCompatibleQueries()
     {
-        Scheduler scheduler = new PlanCheckerRouterPluginScheduler(planCheckerRouterConfig);
-        scheduler.setCandidates(planCheckerRouterConfig.getPlanCheckClustersURIs());
+        PlanCheckerRouterPluginPrestoClient planCheckerRouterPluginPrestoClient =
+                new PlanCheckerRouterPluginPrestoClient(planCheckerRouterConfig);
+        Scheduler scheduler = new PlanCheckerRouterPluginScheduler(planCheckerRouterPluginPrestoClient);
 
         // native compatible query
         Optional<URI> target = scheduler.getDestination(
@@ -119,14 +116,15 @@ public class TestPlanCheckerRouterPlugin
                                 PRESTO_SCHEMA, "tiny"),
                         "SELECT lower(comment) from region"));
         assertTrue(target.isPresent());
-        assertEquals(target.get(), planCheckerRouterConfig.getNativeRouterURI());
+        assertEquals(target.orElseThrow(), planCheckerRouterConfig.getNativeRouterURI());
     }
 
     @Test
     public void testPlanCheckerPluginWithNativeIncompatibleQueries()
     {
-        Scheduler scheduler = new PlanCheckerRouterPluginScheduler(planCheckerRouterConfig);
-        scheduler.setCandidates(planCheckerRouterConfig.getPlanCheckClustersURIs());
+        PlanCheckerRouterPluginPrestoClient planCheckerRouterPluginPrestoClient =
+                new PlanCheckerRouterPluginPrestoClient(planCheckerRouterConfig);
+        Scheduler scheduler = new PlanCheckerRouterPluginScheduler(planCheckerRouterPluginPrestoClient);
 
         // native incompatible query
         Optional<URI> target = scheduler.getDestination(
@@ -136,41 +134,26 @@ public class TestPlanCheckerRouterPlugin
                                 PRESTO_TIME_ZONE, "America/Bahia_Banderas",
                                 PRESTO_CATALOG, "tpch",
                                 PRESTO_SCHEMA, "tiny"),
-                        "SELECT EXISTS(SELECT 1 WHERE l.orderkey > 0 OR l.orderkey != 3) FROM lineitem l LIMIT 1"));
+                        "SELECT x AS y FROM (values (1,2), (2,3)) t(x, y) GROUP BY x ORDER BY apply(x, x -> -x) + 2*x"));
         assertTrue(target.isPresent());
-        assertEquals(target.get(), planCheckerRouterConfig.getJavaRouterURI());
-    }
-
-    @Test
-    public void testPlanCheckerPluginWithUserErrors()
-    {
-        Scheduler scheduler = new PlanCheckerRouterPluginScheduler(planCheckerRouterConfig);
-        scheduler.setCandidates(planCheckerRouterConfig.getPlanCheckClustersURIs());
-
-        // queries with user error, the below query does not have a defined catalog and schema
-        try {
-            scheduler.getDestination(
-                    getMockRouterRequestInfo(
-                            ImmutableListMultimap.of(
-                                    PRESTO_USER, "test",
-                                    PRESTO_TIME_ZONE, "America/Bahia_Banderas"),
-                            "SELECT lower(comment) from region"));
-        }
-        catch (PrestoException e) {
-            verifyQueryError(e, "line 1:55: Schema must be specified when session schema is not set");
-        }
+        assertEquals(target.orElseThrow(), planCheckerRouterConfig.getJavaRouterURI());
     }
 
     private static RouterRequestInfo getMockRouterRequestInfo(ListMultimap<String, String> headers, String query)
     {
-        return new RouterRequestInfo("test", Optional.empty(), emptyList(), query, new MockHttpServletRequest(headers));
+        HttpServletRequest servletRequest = new MockHttpServletRequest(headers);
+        return new RouterRequestInfo("test", Optional.empty(), emptyList(), query, parseHeaders(servletRequest), servletRequest.getUserPrincipal());
     }
 
-    private static void verifyQueryError(PrestoException e, String message)
+    private static Map<String, List<String>> parseHeaders(HttpServletRequest httpServletRequest)
     {
-        QueryError error = QUERY_RESULTS_CODEC.fromJson(e.getMessage()).getError();
-        assertNotNull(error);
-        assertTrue(error.getMessage().equalsIgnoreCase(message));
-        assertSame(ErrorType.valueOf(error.getErrorType()), USER_ERROR);
+        ImmutableMap.Builder<String, List<String>> builder = ImmutableMap.builder();
+        Enumeration<String> headerNames = httpServletRequest.getHeaderNames();
+        while (headerNames.hasMoreElements()) {
+            String headerName = headerNames.nextElement();
+            Enumeration<String> values = httpServletRequest.getHeaders(headerName);
+            builder.put(headerName, list(values));
+        }
+        return builder.build();
     }
 }

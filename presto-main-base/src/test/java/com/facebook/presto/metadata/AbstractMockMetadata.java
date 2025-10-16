@@ -20,7 +20,6 @@ import com.facebook.presto.common.block.BlockEncodingSerde;
 import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeSignature;
-import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
@@ -28,7 +27,6 @@ import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
 import com.facebook.presto.spi.NewTableLayout;
-import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableMetadata;
@@ -37,6 +35,7 @@ import com.facebook.presto.spi.analyzer.ViewDefinition;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorTableVersion;
+import com.facebook.presto.spi.connector.TableFunctionApplicationResult;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.plan.PartitioningHandle;
@@ -88,9 +87,16 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
+    public void registerConnectorFunctions(String catalogName, List<? extends SqlFunction> functionInfos)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public MetadataResolver getMetadataResolver(Session session)
     {
-        return new MetadataResolver() {
+        return new MetadataResolver()
+        {
             @Override
             public boolean catalogExists(String catalogName)
             {
@@ -394,13 +400,13 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
+    public Optional<ColumnHandle> getDeleteRowIdColumn(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    public Optional<ColumnHandle> getUpdateRowIdColumn(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
     {
         throw new UnsupportedOperationException();
     }
@@ -424,7 +430,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public void finishDelete(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishDeleteWithOutput(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments)
     {
         throw new UnsupportedOperationException();
     }
@@ -604,12 +610,6 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public MetadataUpdates getMetadataUpdateResults(Session session, QueryManager queryManager, MetadataUpdates metadataUpdateRequests, QueryId queryId)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public FunctionAndTypeManager getFunctionAndTypeManager()
     {
         throw new UnsupportedOperationException();
@@ -685,5 +685,11 @@ public abstract class AbstractMockMetadata
     public String normalizeIdentifier(Session session, String catalogName, String identifier)
     {
         return identifier.toLowerCase(ENGLISH);
+    }
+
+    @Override
+    public Optional<TableFunctionApplicationResult<TableHandle>> applyTableFunction(Session session, TableFunctionHandle handle)
+    {
+        return Optional.empty();
     }
 }

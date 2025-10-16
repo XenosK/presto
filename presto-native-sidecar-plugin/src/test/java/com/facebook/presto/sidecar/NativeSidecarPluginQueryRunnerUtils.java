@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.sidecar;
 
+import com.facebook.presto.scalar.sql.NativeSqlInvokedFunctionsPlugin;
 import com.facebook.presto.sidecar.functionNamespace.NativeFunctionNamespaceManagerFactory;
 import com.facebook.presto.sidecar.sessionpropertyproviders.NativeSystemSessionPropertyProviderFactory;
 import com.facebook.presto.sidecar.typemanager.NativeTypeManagerFactory;
@@ -21,12 +22,14 @@ import com.google.common.collect.ImmutableMap;
 
 public class NativeSidecarPluginQueryRunnerUtils
 {
-    private NativeSidecarPluginQueryRunnerUtils() {};
+    private NativeSidecarPluginQueryRunnerUtils() {}
 
     public static void setupNativeSidecarPlugin(QueryRunner queryRunner)
     {
         queryRunner.installCoordinatorPlugin(new NativeSidecarPlugin());
-        queryRunner.loadSessionPropertyProvider(NativeSystemSessionPropertyProviderFactory.NAME);
+        queryRunner.loadSessionPropertyProvider(
+                NativeSystemSessionPropertyProviderFactory.NAME,
+                ImmutableMap.of());
         queryRunner.loadFunctionNamespaceManager(
                 NativeFunctionNamespaceManagerFactory.NAME,
                 "native",
@@ -35,5 +38,6 @@ public class NativeSidecarPluginQueryRunnerUtils
                         "function-implementation-type", "CPP"));
         queryRunner.loadTypeManager(NativeTypeManagerFactory.NAME);
         queryRunner.loadPlanCheckerProviderManager("native", ImmutableMap.of());
+        queryRunner.installPlugin(new NativeSqlInvokedFunctionsPlugin());
     }
 }

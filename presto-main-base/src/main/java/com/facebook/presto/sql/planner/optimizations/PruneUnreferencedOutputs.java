@@ -27,6 +27,7 @@ import com.facebook.presto.spi.plan.DistinctLimitNode;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.ExceptNode;
 import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.IndexJoinNode;
 import com.facebook.presto.spi.plan.IndexSourceNode;
 import com.facebook.presto.spi.plan.IntersectNode;
 import com.facebook.presto.spi.plan.JoinNode;
@@ -47,6 +48,7 @@ import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.plan.TableWriterNode;
 import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.plan.UnionNode;
+import com.facebook.presto.spi.plan.UnnestNode;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.plan.WindowNode;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -58,7 +60,6 @@ import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
-import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SequenceNode;
@@ -66,7 +67,6 @@ import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableWriterMergeNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
-import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.UpdateNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
@@ -320,18 +320,40 @@ public class PruneUnreferencedOutputs
 
             planChanged = outputVariables.size() != node.getOutputVariables().size();
 
-            return new SpatialJoinNode(node.getSourceLocation(), node.getId(), node.getStatsEquivalentPlanNode(), node.getType(), left, right, outputVariables, node.getFilter(), node.getLeftPartitionVariable(), node.getRightPartitionVariable(), node.getKdbTree());
+            return new SpatialJoinNode(
+                    node.getSourceLocation(),
+                    node.getId(),
+                    node.getStatsEquivalentPlanNode(),
+                    node.getType(),
+                    left,
+                    right,
+                    outputVariables,
+                    node.getProbeGeometryVariable(),
+                    node.getBuildGeometryVariable(),
+                    node.getRadiusVariable(),
+                    node.getFilter(),
+                    node.getLeftPartitionVariable(),
+                    node.getRightPartitionVariable(),
+                    node.getKdbTree());
         }
 
         @Override
         public PlanNode visitIndexJoin(IndexJoinNode node, RewriteContext<Set<VariableReferenceExpression>> context)
         {
+            Set<VariableReferenceExpression> expectedFilterInputs = new HashSet<>();
+            if (node.getFilter().isPresent()) {
+                expectedFilterInputs = ImmutableSet.<VariableReferenceExpression>builder()
+                        .addAll(VariablesExtractor.extractUnique(node.getFilter().get()))
+                        .build();
+            }
+
             ImmutableSet.Builder<VariableReferenceExpression> probeInputsBuilder = ImmutableSet.builder();
             probeInputsBuilder.addAll(context.get())
                     .addAll(Iterables.transform(node.getCriteria(), IndexJoinNode.EquiJoinClause::getProbe));
             if (node.getProbeHashVariable().isPresent()) {
                 probeInputsBuilder.add(node.getProbeHashVariable().get());
             }
+            probeInputsBuilder.addAll(expectedFilterInputs);
             Set<VariableReferenceExpression> probeInputs = probeInputsBuilder.build();
 
             ImmutableSet.Builder<VariableReferenceExpression> indexInputBuilder = ImmutableSet.builder();
@@ -340,6 +362,9 @@ public class PruneUnreferencedOutputs
             if (node.getIndexHashVariable().isPresent()) {
                 indexInputBuilder.add(node.getIndexHashVariable().get());
             }
+            indexInputBuilder.addAll(expectedFilterInputs);
+            // Lookup variables must not be pruned.
+            indexInputBuilder.addAll(node.getLookupVariables());
             Set<VariableReferenceExpression> indexInputs = indexInputBuilder.build();
 
             PlanNode probeSource = context.rewrite(node.getProbeSource(), probeInputs);
@@ -355,7 +380,8 @@ public class PruneUnreferencedOutputs
                     node.getCriteria(),
                     node.getFilter(),
                     node.getProbeHashVariable(),
-                    node.getIndexHashVariable());
+                    node.getIndexHashVariable(),
+                    node.getLookupVariables());
         }
 
         @Override
@@ -816,7 +842,7 @@ public class PruneUnreferencedOutputs
         public PlanNode visitDelete(DeleteNode node, RewriteContext<Set<VariableReferenceExpression>> context)
         {
             ImmutableSet.Builder<VariableReferenceExpression> builder = ImmutableSet.builder();
-            builder.add(node.getRowId());
+            node.getRowId().ifPresent(r -> builder.add(r));
             if (node.getInputDistribution().isPresent()) {
                 builder.addAll(node.getInputDistribution().get().getInputVariables());
             }

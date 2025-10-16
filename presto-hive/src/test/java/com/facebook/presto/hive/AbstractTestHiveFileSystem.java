@@ -225,7 +225,6 @@ public abstract class AbstractTestHiveFileSystem
                 new HivePartitionObjectBuilder(),
                 new HiveEncryptionInformationProvider(ImmutableList.of()),
                 new HivePartitionStats(),
-                new HiveFileRenamer(),
                 columnConverterProvider,
                 new QuickStatsProvider(metastoreClient, HDFS_ENVIRONMENT, DO_NOTHING_DIRECTORY_LISTER, new HiveClientConfig(), new NamenodeStats(), ImmutableList.of()),
                 new HiveTableWritabilityChecker(config));
@@ -471,8 +470,8 @@ public abstract class AbstractTestHiveFileSystem
             assertEquals(filterNonHiddenColumnMetadata(tableMetadata.getColumns()), columns);
 
             // verify the data
-            List<ConnectorTableLayoutResult> tableLayoutResults = metadata.getTableLayouts(session, hiveTableHandle, Constraint.alwaysTrue(), Optional.empty());
-            HiveTableLayoutHandle layoutHandle = (HiveTableLayoutHandle) getOnlyElement(tableLayoutResults).getTableLayout().getHandle();
+            ConnectorTableLayoutResult tableLayoutResult = metadata.getTableLayoutForConstraint(session, hiveTableHandle, Constraint.alwaysTrue(), Optional.empty());
+            HiveTableLayoutHandle layoutHandle = (HiveTableLayoutHandle) tableLayoutResult.getTableLayout().getHandle();
             assertEquals(layoutHandle.getPartitions().get().size(), 1);
             ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, layoutHandle, SPLIT_SCHEDULING_CONTEXT);
             ConnectorSplit split = getOnlyElement(getAllSplits(splitSource));

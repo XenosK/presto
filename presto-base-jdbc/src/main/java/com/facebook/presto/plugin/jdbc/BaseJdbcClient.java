@@ -20,6 +20,8 @@ import com.facebook.presto.common.type.DecimalType;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.UuidType;
 import com.facebook.presto.common.type.VarcharType;
+import com.facebook.presto.plugin.jdbc.mapping.ReadMapping;
+import com.facebook.presto.plugin.jdbc.mapping.WriteMapping;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
@@ -37,9 +39,8 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-
-import javax.annotation.Nullable;
-import javax.annotation.PreDestroy;
+import jakarta.annotation.Nullable;
+import jakarta.annotation.PreDestroy;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -71,7 +72,8 @@ import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.common.type.Varchars.isVarcharType;
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static com.facebook.presto.plugin.jdbc.JdbcWarningCode.USE_OF_DEPRECATED_CONFIGURATION_PROPERTY;
-import static com.facebook.presto.plugin.jdbc.StandardReadMappings.jdbcTypeToPrestoType;
+import static com.facebook.presto.plugin.jdbc.mapping.StandardColumnMappings.jdbcTypeToReadMapping;
+import static com.facebook.presto.plugin.jdbc.mapping.StandardColumnMappings.prestoTypeToWriteMapping;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.google.common.base.MoreObjects.firstNonNull;
@@ -246,13 +248,13 @@ public class BaseJdbcClient
                             resultSet.getString("TYPE_NAME"),
                             resultSet.getInt("COLUMN_SIZE"),
                             resultSet.getInt("DECIMAL_DIGITS"));
-                    Optional<ReadMapping> columnMapping = toPrestoType(session, typeHandle);
+                    Optional<ReadMapping> readMapping = toPrestoType(session, typeHandle);
                     // skip unsupported column types
-                    if (columnMapping.isPresent()) {
+                    if (readMapping.isPresent()) {
                         String columnName = resultSet.getString("COLUMN_NAME");
                         boolean nullable = columnNullable == resultSet.getInt("NULLABLE");
                         Optional<String> comment = Optional.ofNullable(emptyToNull(resultSet.getString("REMARKS")));
-                        columns.add(new JdbcColumnHandle(connectorId, columnName, typeHandle, columnMapping.get().getType(), nullable, comment));
+                        columns.add(new JdbcColumnHandle(connectorId, columnName, typeHandle, readMapping.get().getType(), nullable, comment));
                     }
                 }
                 if (columns.isEmpty()) {
@@ -274,7 +276,7 @@ public class BaseJdbcClient
     @Override
     public Optional<ReadMapping> toPrestoType(ConnectorSession session, JdbcTypeHandle typeHandle)
     {
-        return jdbcTypeToPrestoType(typeHandle);
+        return jdbcTypeToReadMapping(typeHandle);
     }
 
     @Override
@@ -368,7 +370,7 @@ public class BaseJdbcClient
             boolean uppercase = connection.getMetaData().storesUpperCaseIdentifiers();
             String remoteSchema = toRemoteSchemaName(session, identity, connection, schemaTableName.getSchemaName());
             String remoteTable = toRemoteTableName(session, identity, connection, remoteSchema, schemaTableName.getTableName());
-            if (uppercase) {
+            if (uppercase && !caseSensitiveNameMatchingEnabled) {
                 tableName = tableName.toUpperCase(ENGLISH);
             }
             String catalog = connection.getCatalog();
@@ -378,7 +380,7 @@ public class BaseJdbcClient
             ImmutableList.Builder<String> columnList = ImmutableList.builder();
             for (ColumnMetadata column : tableMetadata.getColumns()) {
                 String columnName = column.getName();
-                if (uppercase) {
+                if (uppercase && !caseSensitiveNameMatchingEnabled) {
                     columnName = columnName.toUpperCase(ENGLISH);
                 }
                 columnNames.add(columnName);
@@ -445,7 +447,7 @@ public class BaseJdbcClient
             String tableName = oldTable.getTableName();
             String newSchemaName = newTable.getSchemaName();
             String newTableName = newTable.getTableName();
-            if (metadata.storesUpperCaseIdentifiers()) {
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
                 schemaName = schemaName.toUpperCase(ENGLISH);
                 tableName = tableName.toUpperCase(ENGLISH);
                 newSchemaName = newSchemaName.toUpperCase(ENGLISH);
@@ -493,7 +495,7 @@ public class BaseJdbcClient
             String table = handle.getTableName();
             String columnName = column.getName();
             DatabaseMetaData metadata = connection.getMetaData();
-            if (metadata.storesUpperCaseIdentifiers()) {
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
                 schema = schema != null ? schema.toUpperCase(ENGLISH) : null;
                 table = table.toUpperCase(ENGLISH);
                 columnName = columnName.toUpperCase(ENGLISH);
@@ -514,14 +516,20 @@ public class BaseJdbcClient
     {
         try (Connection connection = connectionFactory.openConnection(identity)) {
             DatabaseMetaData metadata = connection.getMetaData();
-            if (metadata.storesUpperCaseIdentifiers()) {
+            String schema = handle.getSchemaName();
+            String table = handle.getTableName();
+            String columnName = jdbcColumn.getColumnName();
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
+                schema = schema != null ? schema.toUpperCase(ENGLISH) : null;
+                table = table.toUpperCase(ENGLISH);
+                columnName = columnName.toUpperCase(ENGLISH);
                 newColumnName = newColumnName.toUpperCase(ENGLISH);
             }
             String sql = format(
                     "ALTER TABLE %s RENAME COLUMN %s TO %s",
-                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
-                    jdbcColumn.getColumnName(),
-                    newColumnName);
+                    quoted(handle.getCatalogName(), schema, table),
+                    quoted(columnName),
+                    quoted(newColumnName));
             execute(connection, sql);
         }
         catch (SQLException e) {
@@ -533,10 +541,19 @@ public class BaseJdbcClient
     public void dropColumn(ConnectorSession session, JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column)
     {
         try (Connection connection = connectionFactory.openConnection(identity)) {
+            DatabaseMetaData metadata = connection.getMetaData();
+            String schema = handle.getSchemaName();
+            String table = handle.getTableName();
+            String columnName = column.getColumnName();
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
+                schema = schema != null ? schema.toUpperCase(ENGLISH) : null;
+                table = table.toUpperCase(ENGLISH);
+                columnName = columnName.toUpperCase(ENGLISH);
+            }
             String sql = format(
                     "ALTER TABLE %s DROP COLUMN %s",
-                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
-                    column.getColumnName());
+                    quoted(handle.getCatalogName(), schema, table),
+                    quoted(columnName));
             execute(connection, sql);
         }
         catch (SQLException e) {
@@ -664,7 +681,7 @@ public class BaseJdbcClient
 
         try {
             DatabaseMetaData metadata = connection.getMetaData();
-            if (metadata.storesUpperCaseIdentifiers()) {
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
                 return schemaName.toUpperCase(ENGLISH);
             }
             return schemaName;
@@ -712,7 +729,7 @@ public class BaseJdbcClient
 
         try {
             DatabaseMetaData metadata = connection.getMetaData();
-            if (metadata.storesUpperCaseIdentifiers()) {
+            if (metadata.storesUpperCaseIdentifiers() && !caseSensitiveNameMatchingEnabled) {
                 return tableName.toUpperCase(ENGLISH);
             }
             return tableName;
@@ -751,7 +768,6 @@ public class BaseJdbcClient
             statement.execute(query);
         }
     }
-
     protected String toSqlType(Type type)
     {
         if (isVarcharType(type)) {
@@ -774,6 +790,15 @@ public class BaseJdbcClient
         String sqlType = SQL_TYPES.get(type);
         if (sqlType != null) {
             return sqlType;
+        }
+        throw new PrestoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
+    }
+
+    public WriteMapping toWriteMapping(Type type)
+    {
+        Optional<WriteMapping> writeMapping = prestoTypeToWriteMapping(type);
+        if (writeMapping.isPresent()) {
+            return writeMapping.get();
         }
         throw new PrestoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
     }

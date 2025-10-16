@@ -57,7 +57,29 @@ across nodes in the cluster. It can be disabled when it is known that the
 output data set is not skewed in order to avoid the overhead of hashing and
 redistributing all the data across the network. 
 
-The corresponding session property is :ref:`admin/properties-session:\`\`redistribute_writes\`\``. 
+The corresponding session property is :ref:`admin/properties-session:\`\`redistribute_writes\`\``.
+
+``check-access-control-on-utilized-columns-only``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``boolean``
+* **Default value:** ``true``
+
+Apply access control rules on only those columns that are required to produce the query output.
+
+Note: Setting this property to true with the following kinds of queries:
+
+* queries that have ``USING`` in a join condition
+* queries that have duplicate named common table expressions (CTE)
+
+causes the query to be evaluated as if the property is set to false and checks the access control for all columns.
+
+To avoid these problems:
+
+* replace all ``USING`` join conditions in a query with ``ON`` join conditions
+* set unique names for all CTEs in a query
+
+The corresponding session property is :ref:`admin/properties-session:\`\`check_access_control_on_utilized_columns_only\`\``.
 
 ``eager-plan-validation-enabled``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -116,6 +138,26 @@ The maximum size of the request header from the HTTP server.
 Note: The default value can cause errors when large session properties 
 or other large session information is involved. 
 See :ref:`troubleshoot/query:\`\`Request Header Fields Too Large\`\``.
+
+``offset-clause-enabled``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``boolean``
+* **Default value:** ``false``
+
+To enable the ``OFFSET`` clause in SQL query expressions, set this property to ``true``.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`offset_clause_enabled\`\``. 
+
+``max-serializable-object-size``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``long``
+* **Default value:** ``1000``
+
+Maximum object size in bytes that can be considered serializable in a function call by the coordinator.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`max_serializable_object_size\`\``. 
 
 Memory Management Properties
 ----------------------------
@@ -683,6 +725,30 @@ due to splits not being balanced across workers. Ideally, it should be set
 such that there is always at least one split waiting to be processed, but
 not higher.
 
+``node-scheduler.max-splits-per-task``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``integer``
+* **Default value:** ``10``
+
+The target value for the number of splits that can be running for
+each task, assuming all splits have the standard split weight.
+
+Using a higher value is recommended if tasks parallelism is higher than 10.
+Increasing this value may improve query latency by ensuring that the workers
+have enough splits to keep them fully utilized.
+
+When connectors do support weight based split scheduling, the number of splits
+assigned will depend on the weight of the individual splits. If splits are
+small, more of them are allowed to be assigned to each worker to compensate.
+
+Setting this too high will waste memory and may result in lower performance
+due to splits not being balanced across workers. Ideally, it should be set
+such that there is always at least one split waiting to be processed, but
+not higher.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`schedule_splits_based_on_task_load\`\``.
+
 ``node-scheduler.max-pending-splits-per-task``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -963,9 +1029,9 @@ The corresponding session property is :ref:`admin/properties-session:\`\`optimiz
 * **Default Value:** ``false``
 
 Enables the optimizer to use histograms when available to perform cost estimate calculations
-during query optimization. When set to ``false``, this parameter does not prevent histograms
-from being collected by ``ANALYZE``, but prevents them from being used during query
-optimization. This behavior can be controlled on a per-query basis using the
+during query optimization. When set to ``false``, this parameter prevents histograms from
+being collected by ``ANALYZE``, and also prevents the existing histograms from being used
+during query optimization. This behavior can be controlled on a per-query basis using the
 ``optimizer_use_histograms`` session property.
 
 Planner Properties
@@ -1103,3 +1169,59 @@ Query Manager Properties
 
 This property can be used to configure how long a query runs without contact
 from the client application, such as the CLI, before it's abandoned.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`query_client_timeout\`\``.
+
+``query.max-queued-time``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``Duration``
+* **Default value:** ``100d``
+
+Use to configure how long a query can be queued before it is terminated.
+
+The corresponding session property is :ref:`admin/properties-session:\`\`query_max_queued_time\`\``.
+
+Query Retry Properties
+----------------------
+
+``retry.enabled``
+^^^^^^^^^^^^^^^^^
+
+* **Type:** ``boolean``
+* **Default value:** ``true``
+
+Enable cross-cluster retry functionality. When enabled, queries that fail with
+specific error codes can be automatically retried on a backup cluster if a
+retry URL is provided.
+
+``retry.allowed-domains``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``string``
+* **Default value:** (empty, signifying current second-level domain allowed only)
+
+Comma-separated list of allowed domains for retry URLs. Supports wildcards
+like ``*.example.com``. For example: ``cluster1.example.com,*.backup.example.net``.
+When empty (default), only retry URLs from the same domain as the current server
+are allowed.
+
+``retry.require-https``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``boolean``
+* **Default value:** ``false``
+
+Require HTTPS for retry URLs. When enabled, only HTTPS URLs will be accepted
+for cross-cluster retry operations.
+
+``retry.cross-cluster-error-codes``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* **Type:** ``string``
+* **Default value:** ``REMOTE_TASK_ERROR``
+
+Comma-separated list of error codes that allow cross-cluster retry. When a query
+fails with one of these error codes, it can be automatically retried on a backup
+cluster if a retry URL is provided. Available error codes include standard Presto
+error codes such as ``REMOTE_TASK_ERROR``, ``CLUSTER_OUT_OF_MEMORY``, etc.

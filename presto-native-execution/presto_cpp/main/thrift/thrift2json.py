@@ -1,4 +1,4 @@
-#!/Library/Developer/CommandLineTools/usr/bin/python3
+#!/usr/bin/env python3
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -86,9 +86,13 @@ def enum(n):
 
 def struct(n):
     v = {}
-    v["struct"] = True
     v["class_name"] = n.name.value
     v["fields"] = []
+    if n.union:
+        v["union"] = True
+    else:
+        v["struct"] = True
+
     for field in n.fields:
         v["fields"].append(
             dict(

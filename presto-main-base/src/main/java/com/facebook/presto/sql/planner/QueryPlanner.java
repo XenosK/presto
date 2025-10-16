@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.CatalogSchemaName;
 import com.facebook.presto.common.QualifiedObjectName;
 import com.facebook.presto.common.block.SortOrder;
 import com.facebook.presto.common.predicate.TupleDomain;
@@ -114,7 +115,6 @@ import static com.facebook.presto.spi.plan.ProjectNode.Locality.LOCAL;
 import static com.facebook.presto.sql.NodeUtils.getSortItemsFromOrderBy;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.isNumericType;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.getSourceLocation;
-import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.planner.PlannerUtils.newVariable;
 import static com.facebook.presto.sql.planner.PlannerUtils.toOrderingScheme;
 import static com.facebook.presto.sql.planner.PlannerUtils.toSortOrder;
@@ -253,8 +253,6 @@ class QueryPlanner
     {
         RelationType descriptor = analysis.getOutputDescriptor(node.getTable());
         TableHandle handle = analysis.getTableHandle(node.getTable());
-        ColumnHandle rowIdHandle = metadata.getDeleteRowIdColumnHandle(session, handle);
-        Type rowIdType = metadata.getColumnMetadata(session, handle, rowIdHandle).getType();
 
         // add table columns
         ImmutableList.Builder<VariableReferenceExpression> outputVariablesBuilder = ImmutableList.builder();
@@ -268,11 +266,16 @@ class QueryPlanner
         }
 
         // add rowId column
-        Field rowIdField = Field.newUnqualified(node.getLocation(), Optional.empty(), rowIdType);
-        VariableReferenceExpression rowIdVariable = variableAllocator.newVariable(getSourceLocation(node), "$rowId", rowIdField.getType());
-        outputVariablesBuilder.add(rowIdVariable);
-        columns.put(rowIdVariable, rowIdHandle);
-        fields.add(rowIdField);
+        Optional<ColumnHandle> rowIdHandle = metadata.getDeleteRowIdColumn(session, handle);
+        Optional<Field> rowIdField = Optional.empty();
+        if (rowIdHandle.isPresent()) {
+            Type rowIdType = metadata.getColumnMetadata(session, handle, rowIdHandle.get()).getType();
+            rowIdField = Optional.of(Field.newUnqualified(node.getLocation(), Optional.empty(), rowIdType));
+            VariableReferenceExpression rowIdVariable = variableAllocator.newVariable(getSourceLocation(node), "$rowId", rowIdType);
+            outputVariablesBuilder.add(rowIdVariable);
+            columns.put(rowIdVariable, rowIdHandle.get());
+            fields.add(rowIdField.get());
+        }
 
         // create table scan
         List<VariableReferenceExpression> outputVariables = outputVariablesBuilder.build();
@@ -290,12 +293,14 @@ class QueryPlanner
         }
 
         // create delete node
-        VariableReferenceExpression rowId = new VariableReferenceExpression(Optional.empty(), builder.translate(new FieldReference(relationPlan.getDescriptor().indexOf(rowIdField))).getName(), rowIdField.getType());
+        PlanBuilder finalBuilder = builder;
+        Optional<VariableReferenceExpression> rowId = rowIdField.map(f ->
+                new VariableReferenceExpression(Optional.empty(), finalBuilder.translate(new FieldReference(relationPlan.getDescriptor().indexOf(f))).getName(), f.getType()));
         List<VariableReferenceExpression> deleteNodeOutputVariables = ImmutableList.of(
                 variableAllocator.newVariable("partialrows", BIGINT),
                 variableAllocator.newVariable("fragment", VARBINARY));
 
-        return new DeleteNode(getSourceLocation(node), idAllocator.getNextId(), builder.getRoot(), rowId, deleteNodeOutputVariables, Optional.empty());
+        return new DeleteNode(getSourceLocation(node), idAllocator.getNextId(), finalBuilder.getRoot(), rowId, deleteNodeOutputVariables, Optional.empty());
     }
 
     public UpdateNode plan(Update node)
@@ -312,8 +317,6 @@ class QueryPlanner
                 .map(Map.Entry::getValue)
                 .collect(toImmutableList());
         handle = metadata.beginUpdate(session, handle, updatedColumns);
-        ColumnHandle rowIdHandle = metadata.getUpdateRowIdColumnHandle(session, handle, updatedColumns);
-        Type rowIdType = metadata.getColumnMetadata(session, handle, rowIdHandle).getType();
 
         List<String> targetColumnNames = node.getAssignments().stream()
                 .map(assignment -> assignment.getName().getValue())
@@ -338,11 +341,16 @@ class QueryPlanner
         List<Expression> orderedColumnValues = orderedColumnValuesBuilder.build();
 
         // add rowId column
-        Field rowIdField = Field.newUnqualified(node.getLocation(), Optional.empty(), rowIdType);
-        VariableReferenceExpression rowIdVariable = variableAllocator.newVariable(getSourceLocation(node), "$rowId", rowIdField.getType());
-        outputVariablesBuilder.add(rowIdVariable);
-        columns.put(rowIdVariable, rowIdHandle);
-        fields.add(rowIdField);
+        Optional<ColumnHandle> rowIdHandle = metadata.getUpdateRowIdColumn(session, handle, updatedColumns);
+        Optional<Field> rowIdField = Optional.empty();
+        if (rowIdHandle.isPresent()) {
+            Type rowIdType = metadata.getColumnMetadata(session, handle, rowIdHandle.get()).getType();
+            rowIdField = Optional.of(Field.newUnqualified(node.getLocation(), Optional.empty(), rowIdType));
+            VariableReferenceExpression rowIdVariable = variableAllocator.newVariable(getSourceLocation(node), "$rowId", rowIdType);
+            outputVariablesBuilder.add(rowIdVariable);
+            columns.put(rowIdVariable, rowIdHandle.get());
+            fields.add(rowIdField.get());
+        }
 
         // create table scan
         List<VariableReferenceExpression> outputVariables = outputVariablesBuilder.build();
@@ -365,8 +373,10 @@ class QueryPlanner
 
         ImmutableList.Builder<VariableReferenceExpression> updatedColumnValuesBuilder = ImmutableList.builder();
         orderedColumnValues.forEach(columnValue -> updatedColumnValuesBuilder.add(planAndMappings.get(columnValue)));
-        VariableReferenceExpression rowId = new VariableReferenceExpression(Optional.empty(), builder.translate(new FieldReference(relationPlan.getDescriptor().indexOf(rowIdField))).getName(), rowIdField.getType());
-        updatedColumnValuesBuilder.add(rowId);
+        PlanBuilder finalBuilder = builder;
+        Optional<VariableReferenceExpression> rowId = rowIdField.map(f ->
+                new VariableReferenceExpression(Optional.empty(), finalBuilder.translate(new FieldReference(relationPlan.getDescriptor().indexOf(f))).getName(), f.getType()));
+        rowId.ifPresent(r -> updatedColumnValuesBuilder.add(r));
 
         List<VariableReferenceExpression> outputs = ImmutableList.of(
                 variableAllocator.newVariable("partialrows", BIGINT),
@@ -379,7 +389,7 @@ class QueryPlanner
         return new UpdateNode(
                 getSourceLocation(node),
                 idAllocator.getNextId(),
-                builder.getRoot(),
+                finalBuilder.getRoot(),
                 rowId,
                 updatedColumnValuesBuilder.build(),
                 outputs);
@@ -1102,7 +1112,7 @@ class QueryPlanner
         // First, append filter to validate offset values. They mustn't be negative or null.
         VariableReferenceExpression offsetSymbol = coercions.get(frameOffset.get());
         Expression zeroOffset = zeroOfType(TypeProvider.viewOf(variableAllocator.getVariables()).get(offsetSymbol));
-        FunctionHandle fail = metadata.getFunctionAndTypeManager().resolveFunction(Optional.empty(), Optional.empty(), QualifiedObjectName.valueOf("presto.default.fail"), fromTypes(VARCHAR));
+        CatalogSchemaName defaultNamespace = metadata.getFunctionAndTypeManager().getDefaultNamespace();
         Expression predicate = new IfExpression(
                 new ComparisonExpression(
                         GREATER_THAN_OR_EQUAL,
@@ -1111,7 +1121,7 @@ class QueryPlanner
                 TRUE_LITERAL,
                 new Cast(
                         new FunctionCall(
-                                QualifiedName.of("presto", "default", "fail"),
+                                QualifiedName.of(defaultNamespace.getCatalogName(), defaultNamespace.getSchemaName(), "fail"),
                                 ImmutableList.of(new Cast(new StringLiteral("Window frame offset value must not be negative or null"), VARCHAR.getTypeSignature().toString()))),
                         BOOLEAN.getTypeSignature().toString()));
         subPlan = subPlan.withNewRoot(new FilterNode(

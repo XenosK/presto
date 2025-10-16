@@ -38,6 +38,7 @@ import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.plan.TableWriterNode;
 import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.plan.UnionNode;
+import com.facebook.presto.spi.plan.UnnestNode;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.plan.WindowNode;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -226,6 +227,11 @@ public class Patterns
     public static Pattern<WindowNode> window()
     {
         return typeOf(WindowNode.class);
+    }
+
+    public static Pattern<TableFunctionNode> tableFunction()
+    {
+        return typeOf(TableFunctionNode.class);
     }
 
     public static Pattern<RowNumberNode> rowNumber()

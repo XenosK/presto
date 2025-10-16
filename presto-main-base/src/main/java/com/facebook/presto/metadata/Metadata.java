@@ -20,7 +20,7 @@ import com.facebook.presto.common.block.BlockEncodingSerde;
 import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeSignature;
-import com.facebook.presto.execution.QueryManager;
+import com.facebook.presto.metadata.Catalog.CatalogContext;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
@@ -30,7 +30,6 @@ import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
 import com.facebook.presto.spi.NewTableLayout;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableLayoutFilterCoverage;
@@ -42,6 +41,7 @@ import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.connector.ConnectorTableVersion;
+import com.facebook.presto.spi.connector.TableFunctionApplicationResult;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.plan.PartitioningHandle;
@@ -54,6 +54,7 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
 
@@ -73,6 +74,8 @@ public interface Metadata
     Type getType(TypeSignature signature);
 
     void registerBuiltInFunctions(List<? extends SqlFunction> functions);
+
+    void registerConnectorFunctions(String catalogName, List<? extends SqlFunction> functionInfos);
 
     List<String> listSchemaNames(Session session, String catalogName);
 
@@ -309,12 +312,12 @@ public interface Metadata
     /**
      * Get the row ID column handle used with UpdatablePageSource#deleteRows.
      */
-    ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle);
+    Optional<ColumnHandle> getDeleteRowIdColumn(Session session, TableHandle tableHandle);
 
     /**
      * Get the row ID column handle used with UpdatablePageSource.
      */
-    ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns);
+    Optional<ColumnHandle> getUpdateRowIdColumn(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns);
 
     /**
      * @return whether delete without table scan is supported
@@ -336,7 +339,7 @@ public interface Metadata
     /**
      * Finish delete query
      */
-    void finishDelete(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments);
+    Optional<ConnectorOutputMetadata> finishDeleteWithOutput(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments);
 
     /**
      * Begin update query
@@ -359,6 +362,11 @@ public interface Metadata
      * @return Map of catalog name to connector id
      */
     Map<String, ConnectorId> getCatalogNames(Session session);
+
+    default Map<String, CatalogContext> getCatalogNamesWithConnectorContext(Session session)
+    {
+        return ImmutableMap.of();
+    }
 
     /**
      * Get the names that match the specified table prefix (never null).
@@ -494,8 +502,6 @@ public interface Metadata
     @Experimental
     ListenableFuture<Void> commitPageSinkAsync(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments);
 
-    MetadataUpdates getMetadataUpdateResults(Session session, QueryManager queryManager, MetadataUpdates metadataUpdates, QueryId queryId);
-
     // TODO: metadata should not provide FunctionAndTypeManager
     FunctionAndTypeManager getFunctionAndTypeManager();
 
@@ -542,4 +548,6 @@ public interface Metadata
     }
 
     String normalizeIdentifier(Session session, String catalogName, String identifier);
+
+    Optional<TableFunctionApplicationResult<TableHandle>> applyTableFunction(Session session, TableFunctionHandle handle);
 }

@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.units.DataSize;
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.common.Page;
@@ -30,7 +31,6 @@ import com.facebook.presto.execution.ExplainAnalyzeContext;
 import com.facebook.presto.execution.FragmentResultCacheContext;
 import com.facebook.presto.execution.StageExecutionId;
 import com.facebook.presto.execution.TaskManagerConfig;
-import com.facebook.presto.execution.TaskMetadataContext;
 import com.facebook.presto.execution.buffer.OutputBuffer;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.execution.scheduler.ExecutionWriterTarget;
@@ -48,7 +48,6 @@ import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.memory.MemoryManagerConfig;
 import com.facebook.presto.metadata.AnalyzeTableHandle;
 import com.facebook.presto.metadata.BuiltInFunctionHandle;
-import com.facebook.presto.metadata.ConnectorMetadataUpdaterManager;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.AggregationOperator.AggregationOperatorFactory;
@@ -132,6 +131,7 @@ import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorIndex;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.function.FunctionHandle;
@@ -150,11 +150,13 @@ import com.facebook.presto.spi.plan.DeleteNode;
 import com.facebook.presto.spi.plan.DistinctLimitNode;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.IndexJoinNode;
 import com.facebook.presto.spi.plan.IndexSourceNode;
 import com.facebook.presto.spi.plan.JoinDistributionType;
 import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.LimitNode;
 import com.facebook.presto.spi.plan.MarkDistinctNode;
+import com.facebook.presto.spi.plan.MetadataDeleteNode;
 import com.facebook.presto.spi.plan.OrderingScheme;
 import com.facebook.presto.spi.plan.OutputNode;
 import com.facebook.presto.spi.plan.PartitioningScheme;
@@ -172,6 +174,7 @@ import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.spi.plan.TableWriterNode;
 import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.plan.UnionNode;
+import com.facebook.presto.spi.plan.UnnestNode;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.plan.WindowNode;
 import com.facebook.presto.spi.plan.WindowNode.Frame;
@@ -202,16 +205,14 @@ import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.GroupIdNode;
-import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
-import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
+import com.facebook.presto.sql.planner.plan.TableFunctionNode;
 import com.facebook.presto.sql.planner.plan.TableWriterMergeNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
-import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.UpdateNode;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.sql.relational.VariableToChannelTranslator;
@@ -233,9 +234,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.SetMultimap;
 import com.google.common.primitives.Ints;
-import io.airlift.units.DataSize;
-
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -255,6 +254,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.facebook.airlift.concurrent.MoreFutures.addSuccessCallback;
+import static com.facebook.airlift.units.DataSize.Unit.BYTE;
 import static com.facebook.presto.SystemSessionProperties.getAdaptivePartialAggregationRowsReductionRatioThreshold;
 import static com.facebook.presto.SystemSessionProperties.getDynamicFilteringMaxPerDriverRowCount;
 import static com.facebook.presto.SystemSessionProperties.getDynamicFilteringMaxPerDriverSize;
@@ -313,6 +313,7 @@ import static com.facebook.presto.sessionpropertyproviders.JavaWorkerSessionProp
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.StandardWarningCode.PERFORMANCE_WARNING;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.INTERMEDIATE;
 import static com.facebook.presto.spi.plan.AggregationNode.Step.PARTIAL;
@@ -325,6 +326,7 @@ import static com.facebook.presto.spi.plan.ProjectNode.Locality.REMOTE;
 import static com.facebook.presto.spi.relation.ExpressionOptimizer.Level.OPTIMIZED;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.createSymbolReference;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
+import static com.facebook.presto.sql.gen.CursorProcessorCompiler.HIGH_PROJECTION_WARNING_THRESHOLD;
 import static com.facebook.presto.sql.gen.LambdaBytecodeGenerator.compileLambdaProvider;
 import static com.facebook.presto.sql.planner.RowExpressionInterpreter.rowExpressionInterpreter;
 import static com.facebook.presto.sql.planner.SortExpressionExtractor.getSortExpressionContext;
@@ -352,7 +354,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Range.closedOpen;
-import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.IntStream.range;
@@ -366,7 +367,6 @@ public class LocalExecutionPlanner
     private final PartitioningProviderManager partitioningProviderManager;
     private final NodePartitioningManager nodePartitioningManager;
     private final PageSinkManager pageSinkManager;
-    private final ConnectorMetadataUpdaterManager metadataUpdaterManager;
     private final ExpressionCompiler expressionCompiler;
     private final PageFunctionCompiler pageFunctionCompiler;
     private final JoinFilterFunctionCompiler joinFilterFunctionCompiler;
@@ -402,7 +402,6 @@ public class LocalExecutionPlanner
             PartitioningProviderManager partitioningProviderManager,
             NodePartitioningManager nodePartitioningManager,
             PageSinkManager pageSinkManager,
-            ConnectorMetadataUpdaterManager metadataUpdaterManager,
             ExpressionCompiler expressionCompiler,
             PageFunctionCompiler pageFunctionCompiler,
             JoinFilterFunctionCompiler joinFilterFunctionCompiler,
@@ -431,7 +430,6 @@ public class LocalExecutionPlanner
         this.nodePartitioningManager = requireNonNull(nodePartitioningManager, "nodePartitioningManager is null");
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.pageSinkManager = requireNonNull(pageSinkManager, "pageSinkManager is null");
-        this.metadataUpdaterManager = requireNonNull(metadataUpdaterManager, "metadataUpdaterManager is null");
         this.expressionCompiler = requireNonNull(expressionCompiler, "compiler is null");
         this.pageFunctionCompiler = requireNonNull(pageFunctionCompiler, "pageFunctionCompiler is null");
         this.joinFilterFunctionCompiler = requireNonNull(joinFilterFunctionCompiler, "compiler is null");
@@ -791,11 +789,6 @@ public class LocalExecutionPlanner
         private void setInputDriver(boolean inputDriver)
         {
             this.inputDriver = inputDriver;
-        }
-
-        public TaskMetadataContext getTaskMetadataContext()
-        {
-            return taskContext.getTaskMetadataContext();
         }
 
         public TableWriteInfo getTableWriteInfo()
@@ -1213,6 +1206,12 @@ public class LocalExecutionPlanner
         }
 
         @Override
+        public PhysicalOperation visitTableFunction(TableFunctionNode node, LocalExecutionPlanContext context)
+        {
+            throw new UnsupportedOperationException("execution by operator is not yet implemented for table function " + node.getName());
+        }
+
+        @Override
         public PhysicalOperation visitTopN(TopNNode node, LocalExecutionPlanContext context)
         {
             PhysicalOperation source = node.getSource().accept(this, context);
@@ -1513,6 +1512,13 @@ public class LocalExecutionPlanner
                     .collect(toImmutableList());
 
             try {
+                if (projections.size() >= HIGH_PROJECTION_WARNING_THRESHOLD) {
+                    session.getWarningCollector().add(new PrestoWarning(
+                            PERFORMANCE_WARNING.toWarningCode(),
+                            String.format("Query contains %d projections, which exceeds the recommended threshold of %d. " +
+                                            "Queries with very high projection counts may encounter JVM constant pool limits or performance issues.",
+                                    projections.size(), HIGH_PROJECTION_WARNING_THRESHOLD)));
+                }
                 if (columns != null) {
                     Supplier<CursorProcessor> cursorProcessor = expressionCompiler.compileCursorProcessor(
                             session.getSqlFunctionProperties(),
@@ -2739,8 +2745,6 @@ public class LocalExecutionPlanner
                     context.getNextOperatorId(),
                     node.getId(),
                     pageSinkManager,
-                    metadataUpdaterManager,
-                    context.getTaskMetadataContext(),
                     context.getTableWriteInfo().getWriterTarget().orElseThrow(() -> new VerifyException("writerTarget is absent")),
                     inputChannels,
                     notNullChannelColumnNames,
@@ -2919,8 +2923,10 @@ public class LocalExecutionPlanner
         public PhysicalOperation visitDelete(DeleteNode node, LocalExecutionPlanContext context)
         {
             PhysicalOperation source = node.getSource().accept(this, context);
-
-            OperatorFactory operatorFactory = new DeleteOperatorFactory(context.getNextOperatorId(), node.getId(), source.getLayout().get(node.getRowId()), tableCommitContextCodec);
+            if (!node.getRowId().isPresent()) {
+                throw new PrestoException(NOT_SUPPORTED, "DELETE is not supported by this connector");
+            }
+            OperatorFactory operatorFactory = new DeleteOperatorFactory(context.getNextOperatorId(), node.getId(), source.getLayout().get(node.getRowId().get()), tableCommitContextCodec);
 
             Map<VariableReferenceExpression, Integer> layout = ImmutableMap.<VariableReferenceExpression, Integer>builder()
                     .put(node.getOutputVariables().get(0), 0)
@@ -2996,16 +3002,15 @@ public class LocalExecutionPlanner
         {
             Integer[] columnValueAndRowIdChannels = new Integer[columnValueAndRowIdSymbols.size()];
             int symbolCounter = 0;
-            // This depends on the outputSymbols being ordered as the blocks of the
-            // resulting page are ordered.
-            for (VariableReferenceExpression variableReferenceExpression : variableReferenceExpressions) {
-                int index = columnValueAndRowIdSymbols.indexOf(variableReferenceExpression);
-                if (index >= 0) {
-                    columnValueAndRowIdChannels[index] = symbolCounter;
-                }
+            for (VariableReferenceExpression columnValueAndRowIdSymbol : columnValueAndRowIdSymbols) {
+                int index = variableReferenceExpressions.indexOf(columnValueAndRowIdSymbol);
+
+                verify(index >= 0, "Could not find columnValueAndRowIdSymbol %s in the variableReferenceExpressions %s", columnValueAndRowIdSymbol, variableReferenceExpressions);
+                columnValueAndRowIdChannels[symbolCounter] = index;
+
                 symbolCounter++;
             }
-            checkArgument(symbolCounter == columnValueAndRowIdSymbols.size(), "symbolCounter %s should be columnValueAndRowIdChannels.size() %s", symbolCounter);
+
             return Arrays.asList(columnValueAndRowIdChannels);
         }
 
@@ -3480,8 +3485,7 @@ public class LocalExecutionPlanner
                 return metadata.finishInsert(session, ((InsertHandle) target).getHandle(), fragments, statistics);
             }
             else if (target instanceof DeleteHandle) {
-                metadata.finishDelete(session, ((DeleteHandle) target).getHandle(), fragments);
-                return Optional.empty();
+                return metadata.finishDeleteWithOutput(session, ((DeleteHandle) target).getHandle(), fragments);
             }
             else if (target instanceof RefreshMaterializedViewHandle) {
                 return metadata.finishRefreshMaterializedView(session, ((RefreshMaterializedViewHandle) target).getHandle(), fragments, statistics);

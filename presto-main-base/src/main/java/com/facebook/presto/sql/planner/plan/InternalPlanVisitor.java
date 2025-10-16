@@ -37,11 +37,6 @@ public abstract class InternalPlanVisitor<R, C>
         return visitPlan(node, context);
     }
 
-    public R visitIndexJoin(IndexJoinNode node, C context)
-    {
-        return visitPlan(node, context);
-    }
-
     public R visitOffset(OffsetNode node, C context)
     {
         return visitPlan(node, context);
@@ -52,22 +47,12 @@ public abstract class InternalPlanVisitor<R, C>
         return visitPlan(node, context);
     }
 
-    public R visitMetadataDelete(MetadataDeleteNode node, C context)
-    {
-        return visitPlan(node, context);
-    }
-
     public R visitUpdate(UpdateNode node, C context)
     {
         return visitPlan(node, context);
     }
 
     public R visitStatisticsWriterNode(StatisticsWriterNode node, C context)
-    {
-        return visitPlan(node, context);
-    }
-
-    public R visitUnnest(UnnestNode node, C context)
     {
         return visitPlan(node, context);
     }
@@ -133,6 +118,11 @@ public abstract class InternalPlanVisitor<R, C>
     }
 
     public R visitSequence(SequenceNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
+    public R visitTableFunction(TableFunctionNode node, C context)
     {
         return visitPlan(node, context);
     }

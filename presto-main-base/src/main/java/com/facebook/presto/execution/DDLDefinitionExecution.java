@@ -24,9 +24,9 @@ import com.facebook.presto.sql.analyzer.BuiltInQueryPreparer;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.Statement;
 import com.facebook.presto.transaction.TransactionManager;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.ListenableFuture;
-
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
@@ -62,6 +62,8 @@ public class DDLDefinitionExecution<T extends Statement>
     @Override
     protected ListenableFuture<?> executeTask()
     {
+        accessControl.checkQueryIntegrity(stateMachine.getSession().getIdentity(), stateMachine.getSession().getAccessControlContext(), query, ImmutableMap.of(), ImmutableMap.of());
+
         return task.execute(statement, transactionManager, metadata, accessControl, stateMachine.getSession(), parameters, stateMachine.getWarningCollector(), query);
     }
 

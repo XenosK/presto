@@ -22,12 +22,11 @@ using IcebergConnectorProtocol = ConnectorProtocolTemplate<
     IcebergTableHandle,
     IcebergTableLayoutHandle,
     IcebergColumnHandle,
-    NotImplemented,
-    NotImplemented,
+    IcebergInsertTableHandle,
+    IcebergOutputTableHandle,
     IcebergSplit,
     NotImplemented,
     hive::HiveTransactionHandle,
-    NotImplemented,
     NotImplemented,
     NotImplemented>;
 

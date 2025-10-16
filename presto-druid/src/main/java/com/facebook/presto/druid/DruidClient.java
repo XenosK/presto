@@ -18,6 +18,7 @@ import com.facebook.airlift.http.client.HttpUriBuilder;
 import com.facebook.airlift.http.client.Request;
 import com.facebook.airlift.http.client.ResponseHandler;
 import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.units.Duration;
 import com.facebook.presto.druid.ingestion.DruidIngestTask;
 import com.facebook.presto.druid.metadata.DruidColumnInfo;
 import com.facebook.presto.druid.metadata.DruidSegmentIdWrapper;
@@ -32,10 +33,8 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.units.Duration;
-import org.checkerframework.checker.nullness.qual.Nullable;
-
-import javax.inject.Inject;
+import jakarta.annotation.Nullable;
+import jakarta.inject.Inject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -65,7 +64,6 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
-import static com.google.common.net.MediaType.JSON_UTF_8;
 import static java.lang.String.format;
 import static java.net.HttpURLConnection.HTTP_OK;
 import static java.util.Locale.ENGLISH;
@@ -202,7 +200,7 @@ public class DruidClient
     private static Request.Builder setContentTypeHeaders(Request.Builder requestBuilder)
     {
         return requestBuilder
-                .setHeader(CONTENT_TYPE, JSON_UTF_8.toString());
+                .setHeader(CONTENT_TYPE, "application/json");
     }
 
     private static byte[] createRequestBody(String query, DruidResultFormat resultFormat, boolean queryHeader)

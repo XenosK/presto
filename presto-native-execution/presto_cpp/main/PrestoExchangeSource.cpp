@@ -197,6 +197,7 @@ void PrestoExchangeSource::doRequest(
           protocol::PRESTO_MAX_WAIT_HTTP_HEADER,
           protocol::Duration(maxWait.count(), protocol::TimeUnit::MICROSECONDS)
               .toString())
+      .header(proxygen::HTTP_HEADER_HOST, fmt::format("{}:{}", host_, port_))
       .send(httpClient_.get(), "", delayMs)
       .via(driverExecutor_)
       .thenTry(
@@ -517,7 +518,7 @@ void PrestoExchangeSource::handleAbortResponse(
 }
 
 bool PrestoExchangeSource::checkSetRequestPromise() {
-  VeloxPromise<Response> promise;
+  VeloxPromise<Response> promise{VeloxPromise<Response>::makeEmpty()};
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
     promise = std::move(promise_);

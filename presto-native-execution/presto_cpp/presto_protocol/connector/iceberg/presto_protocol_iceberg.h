@@ -129,6 +129,30 @@ void to_json(json& j, const IcebergTableName& p);
 void from_json(const json& j, IcebergTableName& p);
 } // namespace facebook::presto::protocol::iceberg
 namespace facebook::presto::protocol::iceberg {
+enum class PartitionTransformType {
+  IDENTITY,
+  YEAR,
+  MONTH,
+  DAY,
+  HOUR,
+  BUCKET,
+  TRUNCATE
+};
+extern void to_json(json& j, const PartitionTransformType& e);
+extern void from_json(const json& j, PartitionTransformType& e);
+} // namespace facebook::presto::protocol::iceberg
+namespace facebook::presto::protocol::iceberg {
+struct IcebergPartitionField {
+  int sourceId = {};
+  int fieldId = {};
+  std::shared_ptr<int> parameter = {};
+  PartitionTransformType transform = {};
+  String name = {};
+};
+void to_json(json& j, const IcebergPartitionField& p);
+void from_json(const json& j, IcebergPartitionField& p);
+} // namespace facebook::presto::protocol::iceberg
+namespace facebook::presto::protocol::iceberg {
 struct PrestoIcebergNestedField {
   bool optional = {};
   int id = {};
@@ -154,7 +178,7 @@ namespace facebook::presto::protocol::iceberg {
 struct PrestoIcebergPartitionSpec {
   int specId = {};
   PrestoIcebergSchema schema = {};
-  List<String> fields = {};
+  List<IcebergPartitionField> fields = {};
 };
 void to_json(json& j, const PrestoIcebergPartitionSpec& p);
 void from_json(const json& j, PrestoIcebergPartitionSpec& p);
@@ -188,7 +212,7 @@ struct IcebergInsertTableHandle : public ConnectorInsertTableHandle {
 void to_json(json& j, const IcebergInsertTableHandle& p);
 void from_json(const json& j, IcebergInsertTableHandle& p);
 } // namespace facebook::presto::protocol::iceberg
-// IcebergInsertTableHandle is special since it needs an usage of
+// IcebergOutputTableHandle is special since it needs an usage of
 // hive::.
 
 namespace facebook::presto::protocol::iceberg {

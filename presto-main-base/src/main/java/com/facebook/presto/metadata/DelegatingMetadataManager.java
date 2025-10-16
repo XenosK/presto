@@ -20,7 +20,6 @@ import com.facebook.presto.common.block.BlockEncodingSerde;
 import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeSignature;
-import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
@@ -28,7 +27,6 @@ import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
 import com.facebook.presto.spi.NewTableLayout;
-import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableMetadata;
@@ -36,6 +34,7 @@ import com.facebook.presto.spi.analyzer.ViewDefinition;
 import com.facebook.presto.spi.connector.ConnectorCapabilities;
 import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorTableVersion;
+import com.facebook.presto.spi.connector.TableFunctionApplicationResult;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.plan.PartitioningHandle;
@@ -48,8 +47,7 @@ import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
-
-import javax.inject.Inject;
+import jakarta.inject.Inject;
 
 import java.util.Collection;
 import java.util.List;
@@ -87,6 +85,12 @@ public abstract class DelegatingMetadataManager
     public void registerBuiltInFunctions(List<? extends SqlFunction> functionInfos)
     {
         delegate.registerBuiltInFunctions(functionInfos);
+    }
+
+    @Override
+    public void registerConnectorFunctions(String catalogName, List<? extends SqlFunction> functionInfos)
+    {
+        delegate.registerConnectorFunctions(catalogName, functionInfos);
     }
 
     @Override
@@ -361,15 +365,15 @@ public abstract class DelegatingMetadataManager
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
+    public Optional<ColumnHandle> getDeleteRowIdColumn(Session session, TableHandle tableHandle)
     {
-        return delegate.getDeleteRowIdColumnHandle(session, tableHandle);
+        return delegate.getDeleteRowIdColumn(session, tableHandle);
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    public Optional<ColumnHandle> getUpdateRowIdColumn(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
     {
-        return delegate.getUpdateRowIdColumnHandle(session, tableHandle, updatedColumns);
+        return delegate.getUpdateRowIdColumn(session, tableHandle, updatedColumns);
     }
 
     @Override
@@ -391,9 +395,9 @@ public abstract class DelegatingMetadataManager
     }
 
     @Override
-    public void finishDelete(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments)
+    public Optional<ConnectorOutputMetadata> finishDeleteWithOutput(Session session, DeleteTableHandle tableHandle, Collection<Slice> fragments)
     {
-        delegate.finishDelete(session, tableHandle, fragments);
+        return delegate.finishDeleteWithOutput(session, tableHandle, fragments);
     }
 
     @Override
@@ -584,12 +588,6 @@ public abstract class DelegatingMetadataManager
     }
 
     @Override
-    public MetadataUpdates getMetadataUpdateResults(Session session, QueryManager queryManager, MetadataUpdates metadataUpdates, QueryId queryId)
-    {
-        return delegate.getMetadataUpdateResults(session, queryManager, metadataUpdates, queryId);
-    }
-
-    @Override
     public FunctionAndTypeManager getFunctionAndTypeManager()
     {
         return delegate.getFunctionAndTypeManager();
@@ -659,5 +657,11 @@ public abstract class DelegatingMetadataManager
     public String normalizeIdentifier(Session session, String catalogName, String identifier)
     {
         return delegate.normalizeIdentifier(session, catalogName, identifier);
+    }
+
+    @Override
+    public Optional<TableFunctionApplicationResult<TableHandle>> applyTableFunction(Session session, TableFunctionHandle handle)
+    {
+        return delegate.applyTableFunction(session, handle);
     }
 }

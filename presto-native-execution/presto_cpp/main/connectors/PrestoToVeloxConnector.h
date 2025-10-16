@@ -13,9 +13,9 @@
  */
 #pragma once
 
+#include "presto_cpp/main/types/PrestoToVeloxExpr.h"
 #include "presto_cpp/presto_protocol/connector/hive/presto_protocol_hive.h"
 #include "presto_cpp/presto_protocol/core/ConnectorProtocol.h"
-#include "presto_cpp/main/types/PrestoToVeloxExpr.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/PlanNode.h"
@@ -34,6 +34,27 @@ void unregisterPrestoToVeloxConnector(const std::string& connectorName);
 
 const PrestoToVeloxConnector& getPrestoToVeloxConnector(
     const std::string& connectorName);
+
+velox::TypePtr stringToType(
+    const std::string& typeString,
+    const TypeParser& typeParser);
+
+std::vector<velox::common::Subfield> toRequiredSubfields(
+    const protocol::List<protocol::Subfield>& subfields);
+
+velox::connector::hive::HiveColumnHandle::ColumnType toHiveColumnType(
+    protocol::hive::ColumnType type);
+
+std::unique_ptr<velox::connector::ConnectorTableHandle> toHiveTableHandle(
+    const protocol::TupleDomain<protocol::Subfield>& domainPredicate,
+    const std::shared_ptr<protocol::RowExpression>& remainingPredicate,
+    bool isPushdownFilterEnabled,
+    const std::string& tableName,
+    const protocol::List<protocol::Column>& dataColumns,
+    const protocol::TableHandle& tableHandle,
+    const protocol::Map<protocol::String, protocol::String>& tableParameters,
+    const VeloxExprConverter& exprConverter,
+    const TypeParser& typeParser);
 
 class PrestoToVeloxConnector {
  public:
@@ -59,9 +80,7 @@ class PrestoToVeloxConnector {
       const protocol::TableHandle& tableHandle,
       const VeloxExprConverter& exprConverter,
       const TypeParser& typeParser,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& assignments)
+      velox::connector::ColumnHandleMap& assignments)
       const = 0;
 
   [[nodiscard]] virtual std::unique_ptr<
@@ -136,9 +155,7 @@ class HivePrestoToVeloxConnector final : public PrestoToVeloxConnector {
       const protocol::TableHandle& tableHandle,
       const VeloxExprConverter& exprConverter,
       const TypeParser& typeParser,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& assignments)
+      velox::connector::ColumnHandleMap& assignments)
       const final;
 
   std::unique_ptr<velox::connector::ConnectorInsertTableHandle>
@@ -170,33 +187,6 @@ class HivePrestoToVeloxConnector final : public PrestoToVeloxConnector {
       bool& hasPartitionColumn) const;
 };
 
-class IcebergPrestoToVeloxConnector final : public PrestoToVeloxConnector {
- public:
-  explicit IcebergPrestoToVeloxConnector(std::string connectorName)
-      : PrestoToVeloxConnector(std::move(connectorName)) {}
-
-  std::unique_ptr<velox::connector::ConnectorSplit> toVeloxSplit(
-      const protocol::ConnectorId& catalogId,
-      const protocol::ConnectorSplit* connectorSplit,
-      const protocol::SplitContext* splitContext) const final;
-
-  std::unique_ptr<velox::connector::ColumnHandle> toVeloxColumnHandle(
-      const protocol::ColumnHandle* column,
-      const TypeParser& typeParser) const final;
-
-  std::unique_ptr<velox::connector::ConnectorTableHandle> toVeloxTableHandle(
-      const protocol::TableHandle& tableHandle,
-      const VeloxExprConverter& exprConverter,
-      const TypeParser& typeParser,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& assignments)
-      const final;
-
-  std::unique_ptr<protocol::ConnectorProtocol> createConnectorProtocol()
-      const final;
-};
-
 class TpchPrestoToVeloxConnector final : public PrestoToVeloxConnector {
  public:
   explicit TpchPrestoToVeloxConnector(std::string connectorName)
@@ -215,9 +205,7 @@ class TpchPrestoToVeloxConnector final : public PrestoToVeloxConnector {
       const protocol::TableHandle& tableHandle,
       const VeloxExprConverter& exprConverter,
       const TypeParser& typeParser,
-      std::unordered_map<
-          std::string,
-          std::shared_ptr<velox::connector::ColumnHandle>>& assignments)
+      velox::connector::ColumnHandleMap& assignments)
       const final;
 
   std::unique_ptr<protocol::ConnectorProtocol> createConnectorProtocol()

@@ -41,7 +41,7 @@ IGNORED_TYPES = {
 language = {
     "cpp": {
         "TypeMap": {
-            r"([ ,<])(ColumnHandle|PlanNode|RowExpression|ConnectorMetadataUpdateHandle|ConnectorDeleteTableHandle)([ ,>])": r"\1std::shared_ptr<\2>\3",
+            r"([ ,<])(ColumnHandle|PlanNode|RowExpression|ConnectorDeleteTableHandle)([ ,>])": r"\1std::shared_ptr<\2>\3",
             r"Optional<int\[\]>": "Optional<List<int>>",
             r"Optional<byte\[\]>": "Optional<List<byte>>",
             r"int\[\]": "List<int>",
@@ -170,7 +170,7 @@ def member_name(name):
 def special(filepath, current_class, key, classes, depends):
     classes[current_class].class_name = current_class
     (status, stdout, stderr) = classes[current_class][key] = util.run(
-        "../../velox/scripts/license-header.py --header ../../license.header --remove "
+        "../../velox/scripts/checks/license-header.py --header ../../license.header --remove "
         + filepath
     )
     classes[current_class][key] = stdout
